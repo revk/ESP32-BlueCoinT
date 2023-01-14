@@ -1,0 +1,9 @@
+[submodule "PCBCase"]
+	path = PCBCase
+	url = git@github.com:revk/PCBCase.git
+[submodule "ftdizap"]
+	path = ftdizap
+	url = https://github.com/revk/ftdizap
+[submodule "components/ESP32-RevK"]
+	path = components/ESP32-RevK
+	url = git@github.com:revk/ESP32-RevK.git
