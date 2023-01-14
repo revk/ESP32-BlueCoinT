@@ -33,6 +33,7 @@ static const char TAG[] = "DEFCON";
 // TODO 8 bit?
 
 // Dynamic
+httpd_handle_t webserver = NULL;
 
 #define	settings		\
 
@@ -134,53 +135,9 @@ static esp_err_t web_root(httpd_req_t * req)
 
 void defcon_task(void *arg)
 {
-   // Expects outputs to be configured
-   // 0=Beep - set mark/space
-   // 1-5=DEFCON lights White/Red/Yellow/Green/Blue
-   // 6=Click
-   // 7=Blink - set mark/space
-   // The defcon setting is lowest DEFCON setting that we don't beep for, e.g. 5 would be good not to beep when going to DEFCON 5 or above
-   outputcount[7] = -1;         // Blinking forever - set mark/space
-   outputbits |= (1 << 7);      // Start blinking
-   int8_t level = -1;           // Current DEFCON level
    while (1)
    {
       usleep(10000);
-      if (level != defcon_level)
-      {
-         usleep(100000);
-         if (level != defcon_level)
-         {
-            uint8_t click = (1 << 6);
-            uint8_t blink = (1 << 7);
-            if (level >= 9 || defcon_level >= 9)
-               click = 0;
-            if (defcon_level >= defconblink)
-               blink = 0;
-            int8_t waslevel = level;
-            level = defcon_level;
-            // Off existing
-            outputbits = (outputbits & ~0x7F) | click | blink;
-            outputcount[7] = (blink ? -1 : 0);
-            usleep(500000);
-            // Report
-            jo_t j = jo_object_alloc();
-            jo_int(j, "level", level);
-            revk_info("defcon", &j);
-            // Beep count
-            if (level < defcon && click)
-               outputcount[0] = waslevel < level ? 1 : level ? 2 : 3;   // To/from level 9 is silent
-            // On new
-            outputbits = (outputbits & ~0x7F) | (level > 5 ? 0 : level ? (1 << level) : (1 << 1)) | (outputcount[0] ? (1 << 0) : 0);
-            if (!level)
-               for (int i = 2; i <= 5; i++)
-               {
-                  usleep(100000);
-                  outputbits = (outputbits ^ click) | (1 << i);
-               }
-            sleep(1);
-         }
-      }
    }
 }
 
@@ -227,20 +184,9 @@ const char *app_callback(int client, const char *prefix, const char *target, con
    {
       if (defcon)
          lwmqtt_subscribe(revk_mqtt(0), "DEFCON/#");
-      refresh = 1;
    }
    if (!strcmp(suffix, "shutdown"))
       httpd_stop(webserver);
-   if (!strcmp(suffix, "upgrade") || !strcmp(suffix, "wait"))
-   {
-      busy = esp_timer_get_time() + 60000000ULL;
-      return "";
-   }
-   if (!strcmp(suffix, "sleep"))
-   {
-      busy = 0;
-      return "";
-   }
    return NULL;
 }
 
@@ -252,7 +198,6 @@ const char *app_callback(int client, const char *prefix, const char *target, con
 
 void app_main()
 {
-   time_t now = time(0);
    revk_boot(&app_callback);
 #define io(n,d)           revk_register(#n,0,sizeof(n),&n,"- "#d,SETTING_SET|SETTING_BITFIELD);
 #define b(n) revk_register(#n,0,sizeof(n),&n,NULL,SETTING_BOOLEAN);
