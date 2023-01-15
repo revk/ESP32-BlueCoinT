@@ -5,8 +5,6 @@ static __attribute__((unused))
 const char TAG[] = "DEFCON";
 
 /* Notes
- * 0. Try NimBLE
- * 1. Advertise HID or something iPhones like, but we can be simpler on connect, remove demo HRS stuff.
  * 2. Timeout limited advertise, have timeout on phone setup.
  * 3. Disconnect after pairing, we don't stay connected.
  * 4. Work out can we passive scan and find the devices we paired with to determine presence?
@@ -489,7 +487,12 @@ defcon_gap_event(struct ble_gap_event *event, void *arg)
             defcon_advertise();
         }
         conn_handle = event->connect.conn_handle;
+	ble_gap_security_initiate(conn_handle);
         break;
+
+    case BLE_GAP_EVENT_IDENTITY_RESOLVED:
+	ESP_LOGI(TAG,"Resolved");
+	break;
 
     case BLE_GAP_EVENT_DISCONNECT:
         MODLOG_DFLT(INFO, "disconnect; reason=%d\n", event->disconnect.reason);
