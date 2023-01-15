@@ -5,7 +5,7 @@ static __attribute__((unused))
 const char TAG[] = "DEFCON";
 
 /* Notes
- * 1. Change from demo HRS to something an iPhone would show and want to connect to - a keyboard maybe?
+ * 1. Change from demo HRS to something an iPhone would show and want to connect - HID in advertised services works
  * 2. Change to disconnect if connected and after pairing, we don't stay connected
  * 3. Change to only advertise in a setup mode, and otherwise be scanning
  * 4. Work out can we passive scan and find the devices we paired with to determine presence?
@@ -241,12 +241,10 @@ static uint8_t adv_config_done = 0;
 
 static uint16_t heart_rate_handle_table[HRS_IDX_NB];
 
-static uint8_t test_manufacturer[4]={'R', 'e', 'v', 'K'};
-
 static uint8_t sec_service_uuid[16] = {
     /* LSB <--------------------------------------------------------------------------------> MSB */
     //first uuid, 16bit, [12],[13] is the value
-    0xfb, 0x34, 0x9b, 0x5f, 0x80, 0x00, 0x00, 0x80, 0x00, 0x10, 0x00, 0x00, 0x18, 0x0D, 0x00, 0x00,
+    0xfb, 0x34, 0x9b, 0x5f, 0x80, 0x00, 0x00, 0x80, 0x00, 0x10, 0x00, 0x00, 0x12, 0x18, 0x00, 0x00, /* HID 1812 */
 };
 
 // config adv data
@@ -255,21 +253,21 @@ static esp_ble_adv_data_t heart_rate_adv_config = {
     .include_txpower = true,
     .min_interval = 0x0006, //slave connection min interval, Time = min_interval * 1.25 msec
     .max_interval = 0x0010, //slave connection max interval, Time = max_interval * 1.25 msec
-    .appearance = 0x00,
-    .manufacturer_len = 0, //TEST_MANUFACTURER_DATA_LEN,
-    .p_manufacturer_data =  NULL, //&test_manufacturer[0],
+    .appearance = ESP_BLE_APPEARANCE_GENERIC_DISPLAY,
+    .manufacturer_len = 0,
+    .p_manufacturer_data =  NULL,
     .service_data_len = 0,
     .p_service_data = NULL,
     .service_uuid_len = sizeof(sec_service_uuid),
     .p_service_uuid = sec_service_uuid,
-    .flag = (ESP_BLE_ADV_FLAG_LIMIT_DISC | ESP_BLE_ADV_FLAG_BREDR_NOT_SPT),
+    .flag = (ESP_BLE_ADV_FLAG_GEN_DISC | ESP_BLE_ADV_FLAG_BREDR_NOT_SPT),
 };
 // config scan response data
 static esp_ble_adv_data_t heart_rate_scan_rsp_config = {
     .set_scan_rsp = true,
     .include_name = true,
-    .manufacturer_len = sizeof(test_manufacturer),
-    .p_manufacturer_data = test_manufacturer,
+    .manufacturer_len = 4,
+    .p_manufacturer_data = (uint8_t*)"RevK",
 };
 
 static esp_ble_adv_params_t heart_rate_adv_params = {
