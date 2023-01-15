@@ -5,9 +5,9 @@ static __attribute__((unused))
 const char TAG[] = "DEFCON";
 
 /* Notes
- * 1. Change from demo HRS to something an iPhone would show and want to connect - HID in advertised services works
- * 2. Change to disconnect if connected and after pairing, we don't stay connected
- * 3. Change to only advertise in a setup mode, and otherwise be scanning
+ * 1. Advertise HID or something iPhones like, but we can be simpler on connect, remove demo HRS stuff.
+ * 2. Timeout limited advertise, have timeout on phone setup.
+ * 3. Disconnect after pairing, we don't stay connected.
  * 4. Work out can we passive scan and find the devices we paired with to determine presence?
  */
 
@@ -253,14 +253,14 @@ static esp_ble_adv_data_t heart_rate_adv_config = {
     .include_txpower = true,
     .min_interval = 0x0006, //slave connection min interval, Time = min_interval * 1.25 msec
     .max_interval = 0x0010, //slave connection max interval, Time = max_interval * 1.25 msec
-    .appearance = ESP_BLE_APPEARANCE_GENERIC_DISPLAY,
+    .appearance = 0,
     .manufacturer_len = 0,
     .p_manufacturer_data =  NULL,
     .service_data_len = 0,
     .p_service_data = NULL,
     .service_uuid_len = sizeof(sec_service_uuid),
     .p_service_uuid = sec_service_uuid,
-    .flag = (ESP_BLE_ADV_FLAG_GEN_DISC | ESP_BLE_ADV_FLAG_BREDR_NOT_SPT),
+    .flag = (ESP_BLE_ADV_FLAG_GEN_DISC | ESP_BLE_ADV_FLAG_BREDR_NOT_SPT), /* TODO LIMIT while doingset up */
 };
 // config scan response data
 static esp_ble_adv_data_t heart_rate_scan_rsp_config = {
@@ -268,6 +268,7 @@ static esp_ble_adv_data_t heart_rate_scan_rsp_config = {
     .include_name = true,
     .manufacturer_len = 4,
     .p_manufacturer_data = (uint8_t*)"RevK",
+    .appearance=ESP_BLE_APPEARANCE_GENERIC_DISPLAY,
 };
 
 static esp_ble_adv_params_t heart_rate_adv_params = {
