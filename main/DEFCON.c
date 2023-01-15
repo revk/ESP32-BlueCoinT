@@ -5,7 +5,7 @@ static __attribute__((unused))
 const char TAG[] = "DEFCON";
 
 /* Notes
- * 1. Change from demo HRS to something an iPhone would show and want to connect to - but what?
+ * 1. Change from demo HRS to something an iPhone would show and want to connect to - a keyboard maybe?
  * 2. Change to disconnect if connected and after pairing, we don't stay connected
  * 3. Change to only advertise in a setup mode, and otherwise be scanning
  * 4. Work out can we passive scan and find the devices we paired with to determine presence?
