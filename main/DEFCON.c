@@ -19,6 +19,12 @@ const char TAG[] = "DEFCON";
 #include "esp_http_client.h"
 #include "esp_http_server.h"
 #include "esp_crt_bundle.h"
+#include "nimble/nimble_port.h"
+#include "nimble/nimble_port_freertos.h"
+#include "host/ble_hs.h"
+#include "host/util/util.h"
+#include "console/console.h"
+#include "services/gap/ble_svc_gap.h"
 
 #include <driver/gpio.h>
 
@@ -192,6 +198,22 @@ const char *app_callback(int client, const char *prefix, const char *target, con
 
 /* BLE */
 
+/* Heart-rate configuration */
+#define GATT_HRS_UUID                           0x180D
+#define GATT_HRS_MEASUREMENT_UUID               0x2A37
+#define GATT_HRS_BODY_SENSOR_LOC_UUID           0x2A38
+#define GATT_DEVICE_INFO_UUID                   0x180A
+#define GATT_MANUFACTURER_NAME_UUID             0x2A29
+#define GATT_MODEL_NUMBER_UUID                  0x2A24
+
+extern uint16_t hrs_hrm_handle;
+
+struct ble_hs_cfg;
+struct ble_gatt_register_ctxt;
+
+void gatt_svr_register_cb(struct ble_gatt_register_ctxt *ctxt, void *arg);
+int gatt_svr_init(void);
+
 /* MAIN */
 void app_main()
 {
@@ -245,6 +267,8 @@ void app_main()
       revk_web_config_start(webserver);
    }
    REVK_ERR_CHECK(esp_wifi_set_ps(WIFI_PS_MIN_MODEM));  /* default mode, but library may have overridden, needed for BLE at same time as wifi */
+       nimble_port_init();
+
 
    /* main look doing output */
    while (1)
