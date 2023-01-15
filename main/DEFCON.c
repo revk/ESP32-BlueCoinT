@@ -4,6 +4,13 @@
 static __attribute__((unused))
 const char TAG[] = "DEFCON";
 
+/* Notes
+ * 1. Change from demo HRS to something an iPhone would show and want to connect to - but what?
+ * 2. Change to disconnect if connected and after pairing, we don't stay connected
+ * 3. Change to only advertise in a setup mode, and otherwise be scanning
+ * 4. Work out can we passive scan and find the devices we paired with to determine presence?
+ * /
+
 #include "revk.h"
 #include "esp_sleep.h"
 #include "esp_task_wdt.h"
@@ -234,7 +241,7 @@ static uint8_t adv_config_done = 0;
 
 static uint16_t heart_rate_handle_table[HRS_IDX_NB];
 
-static uint8_t test_manufacturer[3]={'E', 'S', 'P'};
+static uint8_t test_manufacturer[4]={'R', 'e', 'v', 'K'};
 
 static uint8_t sec_service_uuid[16] = {
     /* LSB <--------------------------------------------------------------------------------> MSB */
