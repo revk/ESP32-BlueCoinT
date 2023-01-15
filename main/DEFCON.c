@@ -9,7 +9,7 @@ const char TAG[] = "DEFCON";
  * 2. Change to disconnect if connected and after pairing, we don't stay connected
  * 3. Change to only advertise in a setup mode, and otherwise be scanning
  * 4. Work out can we passive scan and find the devices we paired with to determine presence?
- * /
+ */
 
 #include "revk.h"
 #include "esp_sleep.h"
@@ -262,7 +262,7 @@ static esp_ble_adv_data_t heart_rate_adv_config = {
     .p_service_data = NULL,
     .service_uuid_len = sizeof(sec_service_uuid),
     .p_service_uuid = sec_service_uuid,
-    .flag = (ESP_BLE_ADV_FLAG_GEN_DISC | ESP_BLE_ADV_FLAG_BREDR_NOT_SPT),
+    .flag = (ESP_BLE_ADV_FLAG_LIMIT_DISC | ESP_BLE_ADV_FLAG_BREDR_NOT_SPT),
 };
 // config scan response data
 static esp_ble_adv_data_t heart_rate_scan_rsp_config = {
