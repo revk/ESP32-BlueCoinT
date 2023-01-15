@@ -217,27 +217,18 @@ struct ble_gatt_register_ctxt;
 void gatt_svr_register_cb(struct ble_gatt_register_ctxt *ctxt, void *arg);
 int gatt_svr_init(void);
 
-
-static const char *tag = "NimBLE_BLE_HeartRate";
-
-static TimerHandle_t blehr_tx_timer;
-
 static bool notify_state;
 
 static uint16_t conn_handle;
 
-static const char *device_name = "blehr_sensor_1.0";
+static const char *device_name = "DEFCON";
 
-static int blehr_gap_event(struct ble_gap_event *event, void *arg);
+static int defcon_gap_event(struct ble_gap_event *event, void *arg);
 
-static uint8_t blehr_addr_type;
+static uint8_t defcon_addr_type;
 
-/* Variable to simulate heart beats */
-static uint8_t heartrate = 90;
-
-
-static const char *manuf_name = "Apache Mynewt ESP32 devkitC";
-static const char *model_num = "Mynewt HR Sensor demo";
+static const char *manuf_name = "RevK";
+static const char *model_num = "DEFCON Lights";
 uint16_t hrs_hrm_handle;
 
 static int
@@ -423,7 +414,7 @@ print_addr(const void *addr)
  *     o Undirected connectable mode
  */
 static void
-blehr_advertise(void)
+defcon_advertise(void)
 {
     struct ble_gap_adv_params adv_params;
     struct ble_hs_adv_fields fields;
@@ -450,6 +441,14 @@ blehr_advertise(void)
      * stack fill this value automatically.  This is done by assigning the
      * special value BLE_HS_ADV_TX_PWR_LVL_AUTO.
      */
+
+    static const uint8_t svc[]={0x12,0x18};
+    fields.svc_data_uuid16=svc;
+    fields.svc_data_uuid16_len=2;
+
+    fields.appearance=0x0140; // Generic display
+    fields.appearance_is_present=1;
+
     fields.tx_pwr_lvl_is_present = 1;
     fields.tx_pwr_lvl = BLE_HS_ADV_TX_PWR_LVL_AUTO;
 
@@ -466,70 +465,17 @@ blehr_advertise(void)
     /* Begin advertising */
     memset(&adv_params, 0, sizeof(adv_params));
     adv_params.conn_mode = BLE_GAP_CONN_MODE_UND;
-    adv_params.disc_mode = BLE_GAP_DISC_MODE_GEN;
-    rc = ble_gap_adv_start(blehr_addr_type, NULL, BLE_HS_FOREVER,
-                           &adv_params, blehr_gap_event, NULL);
+    adv_params.disc_mode = BLE_GAP_DISC_MODE_GEN; /* TODO BLE_GAP_DISC_MODE_LTD */
+    rc = ble_gap_adv_start(defcon_addr_type, NULL, BLE_HS_FOREVER,
+                           &adv_params, defcon_gap_event, NULL); /* TODO 30 seconds */
     if (rc != 0) {
         MODLOG_DFLT(ERROR, "error enabling advertisement; rc=%d\n", rc);
         return;
     }
 }
 
-static void
-blehr_tx_hrate_stop(void)
-{
-    xTimerStop( blehr_tx_timer, 1000 / portTICK_PERIOD_MS );
-}
-
-/* Reset heart rate measurement */
-static void
-blehr_tx_hrate_reset(void)
-{
-    int rc;
-
-    if (xTimerReset(blehr_tx_timer, 1000 / portTICK_PERIOD_MS ) == pdPASS) {
-        rc = 0;
-    } else {
-        rc = 1;
-    }
-
-    assert(rc == 0);
-
-}
-
-/* This function simulates heart beat and notifies it to the client */
-static void
-blehr_tx_hrate(TimerHandle_t ev)
-{
-    static uint8_t hrm[2];
-    int rc;
-    struct os_mbuf *om;
-
-    if (!notify_state) {
-        blehr_tx_hrate_stop();
-        heartrate = 90;
-        return;
-    }
-
-    hrm[0] = 0x06; /* contact of a sensor */
-    hrm[1] = heartrate; /* storing dummy data */
-
-    /* Simulation of heart beats */
-    heartrate++;
-    if (heartrate == 160) {
-        heartrate = 90;
-    }
-
-    om = ble_hs_mbuf_from_flat(hrm, sizeof(hrm));
-    rc = ble_gatts_notify_custom(conn_handle, hrs_hrm_handle, om);
-
-    assert(rc == 0);
-
-    blehr_tx_hrate_reset();
-}
-
 static int
-blehr_gap_event(struct ble_gap_event *event, void *arg)
+defcon_gap_event(struct ble_gap_event *event, void *arg)
 {
     switch (event->type) {
     case BLE_GAP_EVENT_CONNECT:
@@ -540,7 +486,7 @@ blehr_gap_event(struct ble_gap_event *event, void *arg)
 
         if (event->connect.status != 0) {
             /* Connection failed; resume advertising */
-            blehr_advertise();
+            defcon_advertise();
         }
         conn_handle = event->connect.conn_handle;
         break;
@@ -549,12 +495,12 @@ blehr_gap_event(struct ble_gap_event *event, void *arg)
         MODLOG_DFLT(INFO, "disconnect; reason=%d\n", event->disconnect.reason);
 
         /* Connection terminated; resume advertising */
-        blehr_advertise();
+        defcon_advertise();
         break;
 
     case BLE_GAP_EVENT_ADV_COMPLETE:
         MODLOG_DFLT(INFO, "adv complete\n");
-        blehr_advertise();
+        defcon_advertise();
         break;
 
     case BLE_GAP_EVENT_SUBSCRIBE:
@@ -563,10 +509,8 @@ blehr_gap_event(struct ble_gap_event *event, void *arg)
                     event->subscribe.cur_notify, hrs_hrm_handle);
         if (event->subscribe.attr_handle == hrs_hrm_handle) {
             notify_state = event->subscribe.cur_notify;
-            blehr_tx_hrate_reset();
         } else if (event->subscribe.attr_handle != hrs_hrm_handle) {
             notify_state = event->subscribe.cur_notify;
-            blehr_tx_hrate_stop();
         }
         ESP_LOGI("BLE_GAP_SUBSCRIBE_EVENT", "conn_handle from subscribe=%d", conn_handle);
         break;
@@ -583,33 +527,33 @@ blehr_gap_event(struct ble_gap_event *event, void *arg)
 }
 
 static void
-blehr_on_sync(void)
+defcon_on_sync(void)
 {
     int rc;
 
-    rc = ble_hs_id_infer_auto(0, &blehr_addr_type);
+    rc = ble_hs_id_infer_auto(0, &defcon_addr_type);
     assert(rc == 0);
 
     uint8_t addr_val[6] = {0};
-    rc = ble_hs_id_copy_addr(blehr_addr_type, addr_val, NULL);
+    rc = ble_hs_id_copy_addr(defcon_addr_type, addr_val, NULL);
 
     MODLOG_DFLT(INFO, "Device Address: ");
     print_addr(addr_val);
     MODLOG_DFLT(INFO, "\n");
 
     /* Begin advertising */
-    blehr_advertise();
+    defcon_advertise();
 }
 
 static void
-blehr_on_reset(int reason)
+defcon_on_reset(int reason)
 {
     MODLOG_DFLT(ERROR, "Resetting state; reason=%d\n", reason);
 }
 
-void blehr_host_task(void *param)
+void defcon_host_task(void *param)
 {
-    ESP_LOGI(tag, "BLE Host Task Started");
+    ESP_LOGI(TAG, "BLE Host Task Started");
     /* This function will return only when nimble_port_stop() is executed */
     nimble_port_run();
 
@@ -671,12 +615,13 @@ void app_main()
    }
    REVK_ERR_CHECK(esp_wifi_set_ps(WIFI_PS_MIN_MODEM));  /* default mode, but library may have overridden, needed for BLE at same time as wifi */
        nimble_port_init();
-          /* Initialize the NimBLE host configuration */
-    ble_hs_cfg.sync_cb = blehr_on_sync;
-    ble_hs_cfg.reset_cb = blehr_on_reset;
 
-    /* name, period/time,  auto reload, timer ID, callback */
-    blehr_tx_timer = xTimerCreate("blehr_tx_timer", pdMS_TO_TICKS(1000), pdTRUE, (void *)0, blehr_tx_hrate);
+          /* Initialize the NimBLE host configuration */
+    ble_hs_cfg.sync_cb = defcon_on_sync;
+    ble_hs_cfg.reset_cb = defcon_on_reset;
+    ble_hs_cfg.sm_sc = 1;
+ble_hs_cfg.sm_mitm = 1;
+ble_hs_cfg.sm_io_cap = BLE_SM_IO_CAP_NO_IO;
 
     gatt_svr_init();
 
@@ -684,11 +629,9 @@ void app_main()
     ble_svc_gap_device_name_set(device_name);
 
     /* Start the task */
-    nimble_port_freertos_init(blehr_host_task);
+    nimble_port_freertos_init(defcon_host_task);
 
-
-
-   /* main look doing output */
+    /* main loop */
    while (1)
    {
       sleep(1);
