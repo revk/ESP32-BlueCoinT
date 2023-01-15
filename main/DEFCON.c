@@ -1,7 +1,7 @@
 /* DEFCON app */
 /* Copyright ©2022 - 2023 Adrian Kennard, Andrews & Arnold Ltd.See LICENCE file for details .GPL 3.0 */
 
-static const char TAG[] = "DEFCON";
+static __attribute__((unused)) const char TAG[] = "DEFCON";
 
 #include "revk.h"
 #include "esp_sleep.h"
@@ -9,6 +9,12 @@ static const char TAG[] = "DEFCON";
 #include "esp_http_client.h"
 #include "esp_http_server.h"
 #include "esp_crt_bundle.h"
+#include "esp_bt.h"
+#include "esp_gap_ble_api.h"
+#include "esp_gattc_api.h"
+#include "esp_gatt_defs.h"
+#include "esp_bt_main.h"
+#include "esp_gatt_common_api.h"
 #include <driver/gpio.h>
 
 #ifdef	CONFIG_LWIP_DHCP_DOES_ARP_CHECK
@@ -23,16 +29,15 @@ static const char TAG[] = "DEFCON";
 #if	CONFIG_BOOTLOADER_LOG_LEVEL > 0
 #warning CONFIG_BOOTLOADER_LOG_LEVEL recommended to be no output
 #endif
+#ifndef	CONFIG_SOC_BLE_SUPPORTED
+#error	You need CONFIG_SOC_BLE_SUPPORTED
+#endif
 
 #define	MAXGPIO	36
-#define BITFIELDS "-^"
-#define PORT_INV 0x4000
-#define PORT_PU 0x2000
-#define port_mask(p) ((p)&0xFF) // 16 bit
+#define BITFIELDS "-"
+#define PORT_INV 0x40
+#define port_mask(p) ((p)&0x3F)
 
-// TODO 8 bit?
-
-// Dynamic
 httpd_handle_t webserver = NULL;
 
 #define	settings		\
@@ -42,7 +47,7 @@ httpd_handle_t webserver = NULL;
 #define u8(n,d) uint8_t n;
 #define b(n) uint8_t n;
 #define s(n) char * n;
-#define io(n,d)           uint16_t n;
+#define io(n,d)           uint8_t n;
 settings
 #undef io
 #undef u32
@@ -132,15 +137,6 @@ static esp_err_t web_root(httpd_req_t * req)
    }
    return web_foot(req);
 }
-
-void defcon_task(void *arg)
-{
-   while (1)
-   {
-      usleep(10000);
-   }
-}
-
 
 char *setdefcon(int level, char *value)
 {                               // DEFCON state
@@ -247,12 +243,21 @@ void app_main()
       }
       revk_web_config_start(webserver);
    }
+   REVK_ERR_CHECK(esp_wifi_set_ps(WIFI_PS_MIN_MODEM));
 
-      revk_task("defcon", defcon_task, 0);
+   esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT); // No need for classic, only using BLE
+							    esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
+							        REVK_ERR_CHECK(esp_bt_controller_init(&bt_cfg));
+								REVK_ERR_CHECK(esp_bt_controller_enable(ESP_BT_MODE_BLE));
+								REVK_ERR_CHECK(esp_bluedroid_init());
+								REVK_ERR_CHECK(esp_bluedroid_enable());
 
-      //We run forever, not sleeping
-      ESP_LOGE(TAG, "Idle");
+
+      /* main look doing output */
       while (1)
+      {
          sleep(1);
+	 
+      }
       return;
 }
