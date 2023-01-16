@@ -196,6 +196,8 @@ const char *app_callback(int client, const char *prefix, const char *target, con
    }
    if (!strcmp(suffix, "shutdown"))
       httpd_stop(webserver);
+   if (!strcmp(suffix, "upgrade"))
+	   esp_bt_controller_disable();
    return NULL;
 }
 
