@@ -4,13 +4,6 @@
 static __attribute__((unused))
 const char TAG[] = "DEFCON";
 
-/* Notes
- * 2. Timeout limited advertise, have timeout on phone setup.
- * 3. Disconnect after pairing, we don't stay connected.
- * 4. Work out can we passive scan and find the devices we paired with to determine presence?
- * 5. Work out why upgrade not working, watchdog?
- */
-
 #include "revk.h"
 #include "esp_sleep.h"
 #include "esp_task_wdt.h"
@@ -54,6 +47,7 @@ const char TAG[] = "DEFCON";
 httpd_handle_t webserver = NULL;
 
 #define	settings		\
+	u32(missingtime,20)	\
 
 #define u32(n,d)        uint32_t n;
 #define s8(n,d) int8_t n;
@@ -197,7 +191,8 @@ const char *app_callback(int client, const char *prefix, const char *target, con
       httpd_stop(webserver);
    if (!strcmp(suffix, "upgrade"))
    {
-      esp_bt_controller_disable();      // Kill bluetooth during download
+      esp_bt_controller_disable();      // Kill bluetooth during download - TODO may be better done in RevK library, with a watchdog change
+      esp_wifi_set_ps(WIFI_PS_NONE);    // Fulk wifi
       revk_restart("Download started", 10);     // Restart if download does not happen properly
    }
    return NULL;
@@ -205,25 +200,36 @@ const char *app_callback(int client, const char *prefix, const char *target, con
 
 /* BLE */
 
-/* Heart-rate configuration */
-#define GATT_HRS_UUID                           0x180D
-#define GATT_HRS_MEASUREMENT_UUID               0x2A37
-#define GATT_HRS_BODY_SENSOR_LOC_UUID           0x2A38
+typedef struct device_s device_t;
+struct device_s {
+   device_t *next;              // Linked list
+   ble_addr_t addr;             // Address (includes type)
+   int8_t rssi;                 // RSSI
+   uint8_t len;                 // data len
+   uint8_t data[31];            // data (adv)
+   uint32_t last;               // uptime of last seen
+   uint8_t new:1;               // Should try a connection
+   uint8_t missing:1;           // Missing
+   uint8_t found:1;             // Found
+   uint8_t apple:1;             // Found apple
+};
+device_t *device = NULL;
+
+uint16_t conn_handle;
+uint8_t connected = 0;
+uint32_t scanstart = 0;
+
 #define GATT_DEVICE_INFO_UUID                   0x180A
 #define GATT_MANUFACTURER_NAME_UUID             0x2A29
 #define GATT_MODEL_NUMBER_UUID                  0x2A24
 
-extern uint16_t hrs_hrm_handle;
-
 struct ble_hs_cfg;
 struct ble_gatt_register_ctxt;
 
-void gatt_svr_register_cb(struct ble_gatt_register_ctxt *ctxt, void *arg);
+static int gatt_attr_cb(uint16_t conn_handle, const struct ble_gatt_error *error, struct ble_gatt_attr *attr, void *arg);
+static int gatt_svr_chr_access_device_info(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt, void *arg);
+
 int gatt_svr_init(void);
-
-static bool notify_state;
-
-static uint16_t conn_handle;
 
 static const char *device_name = "DEFCON";
 
@@ -233,38 +239,8 @@ static uint8_t ble_addr_type;
 
 static const char *manuf_name = "RevK";
 static const char *model_num = "DEFCON Lights";
-uint16_t hrs_hrm_handle;
-
-static int gatt_svr_chr_access_heart_rate(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt, void *arg);
-
-static int gatt_svr_chr_access_device_info(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt, void *arg);
 
 static const struct ble_gatt_svc_def gatt_svr_svcs[] = {
-   {
-    /* Service: Heart-rate */
-    .type = BLE_GATT_SVC_TYPE_PRIMARY,
-    .uuid = BLE_UUID16_DECLARE(GATT_HRS_UUID),
-    .characteristics = (struct ble_gatt_chr_def[])
-    {
-     {
-      /* Characteristic: Heart-rate measurement */
-      .uuid = BLE_UUID16_DECLARE(GATT_HRS_MEASUREMENT_UUID),
-      .access_cb = gatt_svr_chr_access_heart_rate,
-      .val_handle = &hrs_hrm_handle,
-      .flags = BLE_GATT_CHR_F_NOTIFY,
-      },
-     {
-      /* Characteristic: Body sensor location */
-      .uuid = BLE_UUID16_DECLARE(GATT_HRS_BODY_SENSOR_LOC_UUID),
-      .access_cb = gatt_svr_chr_access_heart_rate,
-      .flags = BLE_GATT_CHR_F_READ,
-      },
-     {
-      0,                        /* No more characteristics in this service */
-      },
-     }
-     },
-
    {
     /* Service: Device Information */
     .type = BLE_GATT_SVC_TYPE_PRIMARY,
@@ -294,26 +270,6 @@ static const struct ble_gatt_svc_def gatt_svr_svcs[] = {
      },
 };
 
-static int gatt_svr_chr_access_heart_rate(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt, void *arg)
-{
-   /* Sensor location, set to "Chest" */
-   static uint8_t body_sens_loc = 0x01;
-   uint16_t uuid;
-   int rc;
-
-   uuid = ble_uuid_u16(ctxt->chr->uuid);
-
-   if (uuid == GATT_HRS_BODY_SENSOR_LOC_UUID)
-   {
-      rc = os_mbuf_append(ctxt->om, &body_sens_loc, sizeof(body_sens_loc));
-
-      return rc == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
-   }
-
-   assert(0);
-   return BLE_ATT_ERR_UNLIKELY;
-}
-
 static int gatt_svr_chr_access_device_info(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt, void *arg)
 {
    uint16_t uuid;
@@ -337,23 +293,10 @@ static int gatt_svr_chr_access_device_info(uint16_t conn_handle, uint16_t attr_h
    return BLE_ATT_ERR_UNLIKELY;
 }
 
-void gatt_svr_register_cb(struct ble_gatt_register_ctxt *ctxt, void *arg)
+static int gatt_attr_cb(uint16_t conn_handle, const struct ble_gatt_error *error, struct ble_gatt_attr *attr, void *arg)
 {
-   switch (ctxt->op)
-   {
-   case BLE_GATT_REGISTER_OP_SVC:
-      break;
-
-   case BLE_GATT_REGISTER_OP_CHR:
-      break;
-
-   case BLE_GATT_REGISTER_OP_DSC:
-      break;
-
-   default:
-      assert(0);
-      break;
-   }
+   ESP_LOGI(TAG, "GATT CB");
+   return 0;
 }
 
 int gatt_svr_init(void)
@@ -389,28 +332,10 @@ static void ble_advertise(void)
    struct ble_hs_adv_fields fields;
    int rc;
 
-   /*
-    *  Set the advertisement data included in our advertisements:
-    *     o Flags (indicates advertisement type and other general info)
-    *     o Advertising tx power
-    *     o Device name
-    */
    memset(&fields, 0, sizeof(fields));
-
-   /*
-    * Advertise two flags:
-    *      o Discoverability in forthcoming advertisement (general)
-    *      o BLE-only (BR/EDR unsupported)
-    */
    fields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
 
-   /*
-    * Indicate that the TX power level field should be included; have the
-    * stack fill this value automatically.  This is done by assigning the
-    * special value BLE_HS_ADV_TX_PWR_LVL_AUTO.
-    */
-
-   static const uint8_t svc[] = { 0x12, 0x18 };
+   static const uint8_t svc[] = { 0x12, 0x18 }; // HID - gets iPhone attention
    fields.svc_data_uuid16 = svc;
    fields.svc_data_uuid16_len = 2;
 
@@ -432,9 +357,8 @@ static void ble_advertise(void)
    memset(&adv_params, 0, sizeof(adv_params));
    adv_params.conn_mode = BLE_GAP_CONN_MODE_UND;
    adv_params.disc_mode = BLE_GAP_DISC_MODE_GEN;        /* TODO BLE_GAP_DISC_MODE_LTD */
-   rc = ble_gap_adv_start(ble_addr_type, NULL, BLE_HS_FOREVER, &adv_params, ble_gap_event, NULL);       /* TODO 30 seconds */
-   if (rc != 0)
-      return;
+   ble_gap_adv_start(ble_addr_type, NULL, BLE_HS_FOREVER, &adv_params, ble_gap_event, NULL);    /* TODO 30 seconds */
+   connected = 0;
 }
 
 static int ble_gap_event(struct ble_gap_event *event, void *arg)
@@ -442,14 +366,15 @@ static int ble_gap_event(struct ble_gap_event *event, void *arg)
    switch (event->type)
    {
    case BLE_GAP_EVENT_CONNECT:
-      /* A new connection was established or a connection attempt failed */
-      if (event->connect.status != 0)
-      {
-         /* Connection failed; resume advertising */
-         ble_advertise();
+      if (event->connect.status)
+      {                         // Failed
+         ESP_LOGI(TAG, "Connect failed");
+         connected = 0;
+         break;
       }
+      ESP_LOGI(TAG, "Connected");
       conn_handle = event->connect.conn_handle;
-      ble_gap_security_initiate(conn_handle);
+      connected = 1;
       break;
 
    case BLE_GAP_EVENT_IDENTITY_RESOLVED:
@@ -457,24 +382,14 @@ static int ble_gap_event(struct ble_gap_event *event, void *arg)
       break;
 
    case BLE_GAP_EVENT_DISCONNECT:
-      ESP_LOGI(TAG, "Disconnect");
-
-      /* Connection terminated; resume advertising */
-      ble_advertise();
+      ESP_LOGI(TAG, "Disconnected");
+      connected = 0;
       break;
 
    case BLE_GAP_EVENT_ADV_COMPLETE:
-      ble_advertise();
       break;
 
    case BLE_GAP_EVENT_SUBSCRIBE:
-      if (event->subscribe.attr_handle == hrs_hrm_handle)
-      {
-         notify_state = event->subscribe.cur_notify;
-      } else if (event->subscribe.attr_handle != hrs_hrm_handle)
-      {
-         notify_state = event->subscribe.cur_notify;
-      }
       break;
 
    case BLE_GAP_EVENT_MTU:
@@ -482,22 +397,73 @@ static int ble_gap_event(struct ble_gap_event *event, void *arg)
 
    case BLE_GAP_EVENT_DISC:
       {
-         ESP_LOGI(TAG, "Disc event %d, rssi %d, addr type %d %02X:%02X:%02X:%02X:%02X:%02X", event->disc.event_type, event->disc.rssi, event->disc.addr.type, event->disc.addr.val[0], event->disc.addr.val[1], event->disc.addr.val[2], event->disc.addr.val[3], event->disc.addr.val[4], event->disc.addr.val[5]);
+         if (event->disc.event_type)
+            break;              // Not simple adv
          const uint8_t *p = event->disc.data,
              *e = p + event->disc.length_data;
+         if (e > p + 31)
+            break;
+         device_t *d;
+         for (d = device; d; d = d->next)
+            if (d->addr.type == event->disc.addr.type && !memcmp(d->addr.val, event->disc.addr.val, 6))
+               break;
+         if (!d)
+         {
+            d = malloc(sizeof(*d));
+            memset(d, 0, sizeof(*d));
+            d->addr = event->disc.addr;
+            d->new = 1;
+            d->next = device;
+            device = d;
+            ESP_LOGI(TAG, "Added %02X:%02X:%02X:%02X:%02X:%02X", d->addr.val[5], d->addr.val[4], d->addr.val[3], d->addr.val[2], d->addr.val[1], d->addr.val[0]);
+            d->found = 1;
+         }
+         if (d->missing)
+         {
+            d->missing = 0;
+            d->found = 1;
+         }
+         d->last = uptime();
+         d->rssi = event->disc.rssi;
+         if (d->len == event->disc.length_data && !memcmp(d->data, event->disc.data, d->len))
+            break;
+         d->len = event->disc.length_data;
+         if (d->len)
+            memcpy(d->data, event->disc.data, d->len);
+         char msg[200],         // Message size very limited so always OK
+         *o = msg;
          while (p < e)
          {
-            if (*p)
-            {
-               if (*p == 2 && p[1] == 1)
-                  ESP_LOGI(TAG, "Flags %02X", p[2]);
-               else if (p[1] == 9)
-                  ESP_LOGI(TAG, "Name %.*s", *p - 1, p + 2);
-               else
-                  ESP_LOG_BUFFER_HEX(TAG, p, *p + 1);
+            const uint8_t *n = p + *p + 1;
+            if (n > e)
+               break;
+            if (*p > 3 && p[1] == 0xFF && p[2] == 0x4C && p[3] == 0x00)
+            {                   // Apple
+               const uint8_t *P = p + 4;
+               while (P + 1 < n)
+               {
+                  const uint8_t *N = P + P[1] + 2;
+                  if (N > n)
+                     break;
+                  if (*P == 0x10)
+                  {
+                     d->apple = 1;
+                     o += sprintf(o, "Nearby ");
+                     const uint8_t *Q = P + 2;
+                     while (Q < N)
+                        o += sprintf(o, "%02X ", *Q++);
+                  }
+                  P = N;
+               }
             }
-            p += *p + 1;
+            p = n;
          }
+         if (o == msg)
+            break;
+         if (o[-1] == ' ')
+            o--;
+         *o++ = 0;
+         ESP_LOGI(TAG, "Disc event %d, rssi %d, addr type %d %02X:%02X:%02X:%02X:%02X:%02X %s", event->disc.event_type, event->disc.rssi, d->addr.type, d->addr.val[5], d->addr.val[4], d->addr.val[3], d->addr.val[2], d->addr.val[1], d->addr.val[0], msg);
          break;
       }
 
@@ -507,6 +473,16 @@ static int ble_gap_event(struct ble_gap_event *event, void *arg)
    }
 
    return 0;
+}
+
+static void ble_start_disc(void)
+{
+   connected = 0;
+   struct ble_gap_disc_params disc_params = {
+      .passive = 1,
+   };
+   ble_gap_disc(0 /* public */ , BLE_HS_FOREVER, &disc_params, ble_gap_event, NULL);
+   scanstart = uptime();
 }
 
 static void ble_on_sync(void)
@@ -519,13 +495,7 @@ static void ble_on_sync(void)
    uint8_t addr_val[6] = { 0 };
    rc = ble_hs_id_copy_addr(ble_addr_type, addr_val, NULL);
 
-   /* Begin advertising */
-   //ble_advertise(); // TODO
-   struct ble_gap_disc_params disc_params = {
-//.passive=1,
-      .filter_duplicates = 1,   // TODO we should handle maybe
-   };
-   ble_gap_disc(0 /* public */ , BLE_HS_FOREVER, &disc_params, ble_gap_event, NULL);
+   ble_start_disc();
 }
 
 static void ble_on_reset(int reason)
@@ -616,6 +586,95 @@ void app_main()
    while (1)
    {
       sleep(1);
+      uint32_t now = uptime();
+      if (scanstart + missingtime < now)
+         for (device_t * d = device; d; d = d->next)
+            if (!d->missing && d->last + missingtime < now)
+            {                   // Missing
+               d->missing = 1;
+               ESP_LOGI(TAG, "Missing %02X:%02X:%02X:%02X:%02X:%02X", d->addr.val[5], d->addr.val[4], d->addr.val[3], d->addr.val[2], d->addr.val[1], d->addr.val[0]);
+            }
+      for (device_t * d = device; d; d = d->next)
+         if (d->found)
+         {
+            d->found = 0;
+            ESP_LOGI(TAG, "Found %02X:%02X:%02X:%02X:%02X:%02X", d->addr.val[5], d->addr.val[4], d->addr.val[3], d->addr.val[2], d->addr.val[1], d->addr.val[0]);
+         }
+
+      for (device_t * d = device; d; d = d->next)
+         if (d->new)
+         {
+            d->new = 0;
+            if (d->apple)
+            {
+               if (ble_gap_disc_active())
+                  ble_gap_disc_cancel();
+               struct ble_gap_conn_params params = {
+                  .scan_itvl = 0x0010,
+                  .scan_window = 0x0010,
+                  .itvl_min = BLE_GAP_INITIAL_CONN_ITVL_MIN,
+                  .itvl_max = BLE_GAP_INITIAL_CONN_ITVL_MAX,
+                  .latency = BLE_GAP_INITIAL_CONN_LATENCY,
+                  .supervision_timeout = BLE_GAP_INITIAL_SUPERVISION_TIMEOUT,
+                  .min_ce_len = BLE_GAP_INITIAL_CONN_MIN_CE_LEN,
+                  .max_ce_len = BLE_GAP_INITIAL_CONN_MAX_CE_LEN,
+               };
+               if (ble_gap_connect(0, &d->addr, 2000, &params, ble_gap_event, NULL))
+               {
+                  ESP_LOGI(TAG, "Can't connect %02X:%02X:%02X:%02X:%02X:%02X", d->addr.val[5], d->addr.val[4], d->addr.val[3], d->addr.val[2], d->addr.val[1], d->addr.val[0]);
+                  continue;
+               }
+               ESP_LOGI(TAG, "Connect %02X:%02X:%02X:%02X:%02X:%02X", d->addr.val[5], d->addr.val[4], d->addr.val[3], d->addr.val[2], d->addr.val[1], d->addr.val[0]);
+               ESP_LOGI(TAG, "Waiting");
+               int try = 100;
+               while (!connected && ble_gap_conn_active() && try--)
+                  usleep(100000);
+               if (connected)
+                  ESP_LOGI(TAG, "Connected %04X", conn_handle);
+               else
+                  ESP_LOGI(TAG, "Not connected");
+               if (connected)
+               {
+                  if (ble_gap_terminate(conn_handle, 0))
+                  {
+                     ESP_LOGI(TAG, "Can't disconnect");
+                     break;
+                  }
+                  int try = 200;
+                  while (connected && try--)
+                     usleep(100000);
+                  if (connected)
+		  {
+			  ESP_LOGI(TAG,"Disconnect timeout");
+                     break;
+		  }
+               }
+               ESP_LOGI(TAG, "Next");
+            }
+            break;
+         }
+      // TODO CLIENT mode...
+
+      if (!ble_gap_disc_active())
+      {
+         // This should be a safe place to delete
+         uint32_t now = uptime();
+         device_t **dd = &device;
+         while (*dd)
+         {
+            device_t *d = *dd;
+            if (d->last + 300 < now)
+            {
+               ESP_LOGI(TAG, "Forget %02X:%02X:%02X:%02X:%02X:%02X", d->addr.val[5], d->addr.val[4], d->addr.val[3], d->addr.val[2], d->addr.val[1], d->addr.val[0]);
+               *dd = d->next;
+               free(d);
+               continue;
+            }
+            dd = &d->next;
+         }
+         ble_start_disc();
+      }
+
    }
    return;
 }
