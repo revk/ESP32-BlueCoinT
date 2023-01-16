@@ -422,6 +422,7 @@ static int ble_gap_event(struct ble_gap_event *event, void *arg)
 
    case BLE_GAP_EVENT_DISC:
       {
+         connected = 0;
          if (event->disc.event_type)
             break;              // Not simple adv
          const uint8_t *p = event->disc.data,
@@ -489,7 +490,7 @@ static int ble_gap_event(struct ble_gap_event *event, void *arg)
          if (o[-1] == ' ')
             o--;
          *o++ = 0;
-         ESP_LOGI(TAG, "Disc event %d, rssi %d, addr type %d %02X:%02X:%02X:%02X:%02X:%02X %s", event->disc.event_type, event->disc.rssi, d->addr.type, d->addr.val[5], d->addr.val[4], d->addr.val[3], d->addr.val[2], d->addr.val[1], d->addr.val[0], msg);
+         ESP_LOGI(TAG, "Disc event %d, rssi %d, %02X:%02X:%02X:%02X:%02X:%02X %s", event->disc.event_type, event->disc.rssi, d->addr.val[5], d->addr.val[4], d->addr.val[3], d->addr.val[2], d->addr.val[1], d->addr.val[0], msg);
          break;
       }
 
@@ -508,8 +509,6 @@ static void ble_start_disc(void)
    };
    if (ble_gap_disc(0 /* public */ , BLE_HS_FOREVER, &disc_params, ble_gap_event, NULL))
       ESP_LOGI(TAG, "Discover failed to start");
-   else
-      connected = 0;
    scanstart = uptime();
 }
 
@@ -632,7 +631,8 @@ void app_main()
       if (connected || ble_gap_conn_active())
       {                         // Should not be
          ESP_LOGI(TAG, "Force disconnect");
-         ble_gap_terminate(conn_handle, 0);
+         if (ble_gap_terminate(conn_handle, 0))
+            ble_start_disc();
          continue;
       }
 
