@@ -17,6 +17,7 @@ const char TAG[] = "DEFCON";
 #include "esp_http_client.h"
 #include "esp_http_server.h"
 #include "esp_crt_bundle.h"
+#include "esp_bt.h"
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
 #include "host/ble_hs.h"
