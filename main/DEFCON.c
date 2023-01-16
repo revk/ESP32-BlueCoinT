@@ -197,8 +197,8 @@ const char *app_callback(int client, const char *prefix, const char *target, con
       httpd_stop(webserver);
    if (!strcmp(suffix, "upgrade"))
    {
-      esp_bt_controller_disable();
-      revk_restart("Download started", 60);
+      esp_bt_controller_disable();      // Kill bluetooth during download
+      revk_restart("Download started", 10);     // Restart if download does not happen properly
    }
    return NULL;
 }
