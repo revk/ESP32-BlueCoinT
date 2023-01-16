@@ -5,8 +5,6 @@ static __attribute__((unused))
 const char TAG[] = "DEFCON";
 
 /* Notes
- * 0. Try NimBLE
- * 1. Advertise HID or something iPhones like, but we can be simpler on connect, remove demo HRS stuff.
  * 2. Timeout limited advertise, have timeout on phone setup.
  * 3. Disconnect after pairing, we don't stay connected.
  * 4. Work out can we passive scan and find the devices we paired with to determine presence?
@@ -225,9 +223,9 @@ static uint16_t conn_handle;
 
 static const char *device_name = "DEFCON";
 
-static int defcon_gap_event(struct ble_gap_event *event, void *arg);
+static int ble_gap_event(struct ble_gap_event *event, void *arg);
 
-static uint8_t defcon_addr_type;
+static uint8_t ble_addr_type;
 
 static const char *manuf_name = "RevK";
 static const char *model_num = "DEFCON Lights";
@@ -337,27 +335,14 @@ gatt_svr_chr_access_device_info(uint16_t conn_handle, uint16_t attr_handle,
 void
 gatt_svr_register_cb(struct ble_gatt_register_ctxt *ctxt, void *arg)
 {
-    char buf[BLE_UUID_STR_LEN];
-
     switch (ctxt->op) {
     case BLE_GATT_REGISTER_OP_SVC:
-        MODLOG_DFLT(DEBUG, "registered service %s with handle=%d\n",
-                    ble_uuid_to_str(ctxt->svc.svc_def->uuid, buf),
-                    ctxt->svc.handle);
         break;
 
     case BLE_GATT_REGISTER_OP_CHR:
-        MODLOG_DFLT(DEBUG, "registering characteristic %s with "
-                    "def_handle=%d val_handle=%d\n",
-                    ble_uuid_to_str(ctxt->chr.chr_def->uuid, buf),
-                    ctxt->chr.def_handle,
-                    ctxt->chr.val_handle);
         break;
 
     case BLE_GATT_REGISTER_OP_DSC:
-        MODLOG_DFLT(DEBUG, "registering descriptor %s with handle=%d\n",
-                    ble_uuid_to_str(ctxt->dsc.dsc_def->uuid, buf),
-                    ctxt->dsc.handle);
         break;
 
     default:
@@ -387,36 +372,13 @@ gatt_svr_init(void)
     return 0;
 }
 
-/**
- * Utility function to log an array of bytes.
- */
-void
-print_bytes(const uint8_t *bytes, int len)
-{
-    int i;
-    for (i = 0; i < len; i++) {
-        MODLOG_DFLT(INFO, "%s0x%02x", i != 0 ? ":" : "", bytes[i]);
-    }
-}
-
-void
-print_addr(const void *addr)
-{
-    const uint8_t *u8p;
-
-    u8p = addr;
-    MODLOG_DFLT(INFO, "%02x:%02x:%02x:%02x:%02x:%02x",
-                u8p[5], u8p[4], u8p[3], u8p[2], u8p[1], u8p[0]);
-}
-
-
 /*
  * Enables advertising with parameters:
  *     o General discoverable mode
  *     o Undirected connectable mode
  */
 static void
-defcon_advertise(void)
+ble_advertise(void)
 {
     struct ble_gap_adv_params adv_params;
     struct ble_hs_adv_fields fields;
@@ -459,101 +421,110 @@ defcon_advertise(void)
     fields.name_is_complete = 1;
 
     rc = ble_gap_adv_set_fields(&fields);
-    if (rc != 0) {
-        MODLOG_DFLT(ERROR, "error setting advertisement data; rc=%d\n", rc);
+    if (rc != 0)
         return;
-    }
 
     /* Begin advertising */
     memset(&adv_params, 0, sizeof(adv_params));
     adv_params.conn_mode = BLE_GAP_CONN_MODE_UND;
     adv_params.disc_mode = BLE_GAP_DISC_MODE_GEN; /* TODO BLE_GAP_DISC_MODE_LTD */
-    rc = ble_gap_adv_start(defcon_addr_type, NULL, BLE_HS_FOREVER,
-                           &adv_params, defcon_gap_event, NULL); /* TODO 30 seconds */
-    if (rc != 0) {
-        MODLOG_DFLT(ERROR, "error enabling advertisement; rc=%d\n", rc);
+    rc = ble_gap_adv_start(ble_addr_type, NULL, BLE_HS_FOREVER,
+                           &adv_params, ble_gap_event, NULL); /* TODO 30 seconds */
+    if (rc != 0)
         return;
-    }
 }
 
 static int
-defcon_gap_event(struct ble_gap_event *event, void *arg)
+ble_gap_event(struct ble_gap_event *event, void *arg)
 {
     switch (event->type) {
     case BLE_GAP_EVENT_CONNECT:
         /* A new connection was established or a connection attempt failed */
-        MODLOG_DFLT(INFO, "connection %s; status=%d\n",
-                    event->connect.status == 0 ? "established" : "failed",
-                    event->connect.status);
-
         if (event->connect.status != 0) {
             /* Connection failed; resume advertising */
-            defcon_advertise();
+            ble_advertise();
         }
         conn_handle = event->connect.conn_handle;
+	ble_gap_security_initiate(conn_handle);
         break;
 
+    case BLE_GAP_EVENT_IDENTITY_RESOLVED:
+	ESP_LOGI(TAG,"Resolved");
+	break;
+
     case BLE_GAP_EVENT_DISCONNECT:
-        MODLOG_DFLT(INFO, "disconnect; reason=%d\n", event->disconnect.reason);
+	ESP_LOGI(TAG,"Disconnect");
 
         /* Connection terminated; resume advertising */
-        defcon_advertise();
+        ble_advertise();
         break;
 
     case BLE_GAP_EVENT_ADV_COMPLETE:
-        MODLOG_DFLT(INFO, "adv complete\n");
-        defcon_advertise();
+        ble_advertise();
         break;
 
     case BLE_GAP_EVENT_SUBSCRIBE:
-        MODLOG_DFLT(INFO, "subscribe event; cur_notify=%d\n value handle; "
-                    "val_handle=%d\n",
-                    event->subscribe.cur_notify, hrs_hrm_handle);
         if (event->subscribe.attr_handle == hrs_hrm_handle) {
             notify_state = event->subscribe.cur_notify;
         } else if (event->subscribe.attr_handle != hrs_hrm_handle) {
             notify_state = event->subscribe.cur_notify;
         }
-        ESP_LOGI("BLE_GAP_SUBSCRIBE_EVENT", "conn_handle from subscribe=%d", conn_handle);
         break;
 
     case BLE_GAP_EVENT_MTU:
-        MODLOG_DFLT(INFO, "mtu update event; conn_handle=%d mtu=%d\n",
-                    event->mtu.conn_handle,
-                    event->mtu.value);
         break;
 
+    case BLE_GAP_EVENT_DISC:
+	{
+	ESP_LOGI(TAG,"Disc event %d, rssi %d, addr type %d %02X:%02X:%02X:%02X:%02X:%02X",event->disc.event_type,event->disc.rssi,event->disc.addr.type,event->disc.addr.val[0],event->disc.addr.val[1],event->disc.addr.val[2],event->disc.addr.val[3],event->disc.addr.val[4],event->disc.addr.val[5]);
+	const uint8_t *p=event->disc.data,*e=p+event->disc.length_data;
+	while(p<e)
+	{
+		if(*p)
+		{
+			if(*p==2&&p[1]==1)ESP_LOGI(TAG,"Flags %02X",p[2]);
+			else if(p[1]==9)ESP_LOGI(TAG,"Name %.*s",*p-1,p+2);
+			else ESP_LOG_BUFFER_HEX(TAG,p,*p+1);
+		}
+		p+=*p+1;
+	}
+	break;
+	}
+
+    default:
+	ESP_LOGI(TAG,"BLE event %d",event->type);
+	break;
     }
 
     return 0;
 }
 
 static void
-defcon_on_sync(void)
+ble_on_sync(void)
 {
     int rc;
 
-    rc = ble_hs_id_infer_auto(0, &defcon_addr_type);
+    rc = ble_hs_id_infer_auto(0, &ble_addr_type);
     assert(rc == 0);
 
     uint8_t addr_val[6] = {0};
-    rc = ble_hs_id_copy_addr(defcon_addr_type, addr_val, NULL);
-
-    MODLOG_DFLT(INFO, "Device Address: ");
-    print_addr(addr_val);
-    MODLOG_DFLT(INFO, "\n");
+    rc = ble_hs_id_copy_addr(ble_addr_type, addr_val, NULL);
 
     /* Begin advertising */
-    defcon_advertise();
+    //ble_advertise(); // TODO
+     struct ble_gap_disc_params disc_params={
+//.passive=1,
+.filter_duplicates=1,	// TODO we should handle maybe
+     };
+     ble_gap_disc(0 /* public */, BLE_HS_FOREVER , &disc_params, ble_gap_event,NULL);
 }
 
 static void
-defcon_on_reset(int reason)
+ble_on_reset(int reason)
 {
-    MODLOG_DFLT(ERROR, "Resetting state; reason=%d\n", reason);
 }
 
-void defcon_host_task(void *param)
+void ble_task(void *param)
 {
     ESP_LOGI(TAG, "BLE Host Task Started");
     /* This function will return only when nimble_port_stop() is executed */
@@ -619,11 +590,11 @@ void app_main()
        nimble_port_init();
 
           /* Initialize the NimBLE host configuration */
-    ble_hs_cfg.sync_cb = defcon_on_sync;
-    ble_hs_cfg.reset_cb = defcon_on_reset;
+    ble_hs_cfg.sync_cb = ble_on_sync;
+    ble_hs_cfg.reset_cb = ble_on_reset;
     ble_hs_cfg.sm_sc = 1;
-ble_hs_cfg.sm_mitm = 1;
-ble_hs_cfg.sm_io_cap = BLE_SM_IO_CAP_NO_IO;
+    ble_hs_cfg.sm_mitm = 1;
+    ble_hs_cfg.sm_io_cap = BLE_SM_IO_CAP_NO_IO;
 
     gatt_svr_init();
 
@@ -631,13 +602,12 @@ ble_hs_cfg.sm_io_cap = BLE_SM_IO_CAP_NO_IO;
     ble_svc_gap_device_name_set(device_name);
 
     /* Start the task */
-    nimble_port_freertos_init(defcon_host_task);
+    nimble_port_freertos_init(ble_task);
 
     /* main loop */
    while (1)
    {
       sleep(1);
-
    }
    return;
 }
