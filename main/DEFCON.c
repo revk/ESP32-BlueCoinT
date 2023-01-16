@@ -473,10 +473,21 @@ ble_gap_event(struct ble_gap_event *event, void *arg)
         break;
 
     case BLE_GAP_EVENT_DISC:
-	ESP_LOGI(TAG,"Disc event %d, rssi %d, addr type %d",event->disc.event_type,event->disc.rssi,event->disc.addr.type);
-	ESP_LOG_BUFFER_HEX(TAG,event->disc.data,event->disc.length_data);
-	ESP_LOG_BUFFER_HEX(TAG,event->disc.addr.val,sizeof(event->disc.addr.val));
+	{
+	ESP_LOGI(TAG,"Disc event %d, rssi %d, addr type %d %02X:%02X:%02X:%02X:%02X:%02X",event->disc.event_type,event->disc.rssi,event->disc.addr.type,event->disc.addr.val[0],event->disc.addr.val[1],event->disc.addr.val[2],event->disc.addr.val[3],event->disc.addr.val[4],event->disc.addr.val[5]);
+	const uint8_t *p=event->disc.data,*e=p+event->disc.length_data;
+	while(p<e)
+	{
+		if(*p)
+		{
+			if(*p==2&&p[1]==1)ESP_LOGI(TAG,"Flags %02X",p[2]);
+			else if(p[1]==9)ESP_LOGI(TAG,"Name %.*s",*p-1,p+2);
+			else ESP_LOG_BUFFER_HEX(TAG,p,*p+1);
+		}
+		p+=*p+1;
+	}
 	break;
+	}
 
     default:
 	ESP_LOGI(TAG,"BLE event %d",event->type);
@@ -500,10 +511,10 @@ ble_on_sync(void)
     /* Begin advertising */
     //ble_advertise(); // TODO
      struct ble_gap_disc_params disc_params={
-.passive=1,
+//.passive=1,
 .filter_duplicates=1,	// TODO we should handle maybe
      };
-     ble_gap_disc(0, BLE_HS_FOREVER , &disc_params, ble_gap_event,NULL);
+     ble_gap_disc(0 /* public */, BLE_HS_FOREVER , &disc_params, ble_gap_event,NULL);
 }
 
 static void
