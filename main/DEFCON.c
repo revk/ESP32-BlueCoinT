@@ -207,11 +207,12 @@ struct device_s {
    uint8_t data[31];            // data (adv)
    uint32_t last;               // uptime of last seen
    uint8_t new:1;               // Should try a connection
-   uint8_t gattdone:1;          // GATT done
+   uint8_t connected:1;         // We have seen a connection
    uint8_t missing:1;           // Missing
    uint8_t found:1;             // Found
    uint8_t apple:1;             // Found apple
    uint8_t nearby:1;            // Found apple nearby adv
+   // TODO what DEFCON
 };
 device_t *device = NULL;
 
@@ -377,7 +378,7 @@ static void ble_advertise(uint8_t pair)
 
    static uint8_t name[sizeof(TAG)];
    memcpy(name, TAG, sizeof(TAG) - 1);
-   name[sizeof(TAG) - 1] = '0' + defcon_level; // TODO should be the pair level we are setting really
+   name[sizeof(TAG) - 1] = '0' + defcon_level;  // TODO should be the pair level we are setting really
    fields.name = name;
    fields.name_len = sizeof(TAG) - ((defcon_level < 0 || defcon_level > 9) ? 1 : 0);
    fields.name_is_complete = 1;
@@ -411,9 +412,14 @@ static int ble_gap_event(struct ble_gap_event *event, void *arg)
       connected = 1;
       struct ble_gap_conn_desc c;
       if (!ble_gap_conn_find(event->connect.conn_handle, &c))
+      {
+         device_t *d = find_device(&c.peer_ota_addr);
+         d->connected = 1;
          ESP_LOGI(TAG, "Connected %s %s", ble_addr_format(&c.peer_ota_addr), c.role == BLE_GAP_ROLE_SLAVE ? "slave" : "master");
-      if (ble_gap_security_initiate(event->connect.conn_handle))
-         ESP_LOGE(TAG, "Security failed");
+         if (ble_gap_security_initiate(event->connect.conn_handle))
+            ESP_LOGE(TAG, "Security failed");
+      } else
+         ble_gap_terminate(event->enc_change.conn_handle, BLE_ERR_REM_USER_CONN_TERM);
       break;
 
    case BLE_GAP_EVENT_L2CAP_UPDATE_REQ:
@@ -430,10 +436,17 @@ static int ble_gap_event(struct ble_gap_event *event, void *arg)
       {
          struct ble_gap_conn_desc c;
          if (!ble_gap_conn_find(event->enc_change.conn_handle, &c))
+         {
             ESP_LOGI(TAG, "Enc %s %s%s%s%s", ble_addr_format(&c.peer_ota_addr), c.role == BLE_GAP_ROLE_SLAVE ? "slave" : "master", c.sec_state.encrypted ? " encrypted" : "", c.sec_state.authenticated ? " authenticated" : "", c.sec_state.bonded ? " bonded" : "");
+            if (memcmp(c.peer_ota_addr.val, c.peer_id_addr.val, 6))
+            {
+               ESP_LOGE(TAG, "Different ID address %s", ble_addr_format(&c.peer_id_addr));
+            }
+         }
          ble_gap_terminate(event->enc_change.conn_handle, BLE_ERR_REM_USER_CONN_TERM);
          ble_gap_adv_stop();
          // TODO update based on pair logic for requested defcon
+         // TODO how do we confirm the bonding data used?
       }
       break;
    case BLE_GAP_EVENT_REPEAT_PAIRING:
@@ -507,7 +520,7 @@ static int ble_gap_event(struct ble_gap_event *event, void *arg)
          if (o[-1] == ' ')
             o--;
          *o++ = 0;
-         //ESP_LOGI(TAG, "Disc event %d, rssi %d, %s", event->disc.event_type, event->disc.rssi, ble_addr_format(&d->addr));
+         ESP_LOGI(TAG, "Disc event %d, rssi %d, %s", event->disc.event_type, event->disc.rssi, ble_addr_format(&d->addr));
          break;
       }
 
@@ -650,6 +663,7 @@ void app_main()
          {                      // New devices
             d->new = 0;
             ESP_LOGI(TAG, "New %s", ble_addr_format(&d->addr));
+            // TODO We are going to need to do a short directed connection request to each new device
          }
 
       if (connected || ble_gap_conn_active())
