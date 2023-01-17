@@ -520,7 +520,7 @@ static int ble_gap_event(struct ble_gap_event *event, void *arg)
          if (o[-1] == ' ')
             o--;
          *o++ = 0;
-         ESP_LOGI(TAG, "Disc event %d, rssi %d, %s", event->disc.event_type, event->disc.rssi, ble_addr_format(&d->addr));
+         ESP_LOGI(TAG, "Disc event %d, rssi %d, %s %s", event->disc.event_type, event->disc.rssi, ble_addr_format(&d->addr),msg);
          break;
       }
 
