@@ -403,7 +403,7 @@ static void ble_advertise(uint8_t pair, ble_addr_t * direct)
    memset(&adv_params, 0, sizeof(adv_params));
    adv_params.conn_mode = (direct ? BLE_GAP_CONN_MODE_DIR : pair ? BLE_GAP_CONN_MODE_UND : BLE_GAP_CONN_MODE_NON);
    adv_params.disc_mode = (pair ? BLE_GAP_DISC_MODE_LTD : BLE_GAP_DISC_MODE_GEN);
-   if (ble_gap_adv_start(ble_addr_type, direct, direct ? 1000 : pair ? 30000 : BLE_HS_FOREVER, &adv_params, ble_gap_event, NULL))
+   if (ble_gap_adv_start(ble_addr_type, direct, direct ? 2000 : pair ? 30000 : BLE_HS_FOREVER, &adv_params, ble_gap_event, NULL))
       ESP_LOGE(TAG, "Advertised start failed");
 }
 
