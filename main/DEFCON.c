@@ -642,7 +642,8 @@ void app_main()
    ble_hs_cfg.sync_cb = ble_on_sync;
    ble_hs_cfg.reset_cb = ble_on_reset;
    ble_hs_cfg.sm_sc = 1;
-   ble_hs_cfg.sm_mitm = 1;
+   ble_hs_cfg.sm_mitm = 0;
+   ble_hs_cfg.sm_bonding = 1;
    ble_hs_cfg.sm_io_cap = BLE_SM_IO_CAP_NO_IO;
 
    gatt_svr_init();
@@ -676,6 +677,13 @@ void app_main()
       if (pairing || connecting || connected || ble_gap_conn_active())
          continue;
 
+      if (pair)
+      {                         // Start pairing logic
+         pair = 0;
+         ble_advertise(1, NULL);
+	 continue;
+      }
+
       for (device_t * d = device; d; d = d->next)
          if (d->new)
          {                      // New devices
@@ -687,12 +695,6 @@ void app_main()
                break;
             }
          }
-
-      if (pair)
-      {                         // Start pairing logic
-         pair = 0;
-         ble_advertise(1, NULL);
-      }
 
       if (!ble_gap_disc_active())
       {                         // Restart discovery, but first should be safe to check for deletions
