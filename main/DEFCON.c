@@ -157,8 +157,7 @@ char *setdefcon(int level, char *value)
       defcon_level = l;
    } else
       defcon_level = level;
-   if (ble_gap_adv_active())
-      ble_gap_adv_stop();
+   // TODO flag DEFCON changed?
    return "";
 }
 
@@ -217,6 +216,8 @@ struct device_s {
 device_t *device = NULL;
 
 uint8_t connected = 0;
+uint8_t connecting = 0;
+uint8_t pairing = 0;
 uint32_t scanstart = 0;
 
 #define GATT_DEVICE_INFO_UUID                   0x180A
@@ -357,7 +358,7 @@ int gatt_svr_init(void)
  *     o General discoverable mode
  *     o Undirected connectable mode
  */
-static void ble_advertise(uint8_t pair)
+static void ble_advertise(uint8_t pair, ble_addr_t * direct)
 {
    struct ble_gap_adv_params adv_params;
    struct ble_hs_adv_fields fields;
@@ -388,14 +389,22 @@ static void ble_advertise(uint8_t pair)
       return;
 
    if (ble_gap_adv_active())
+   {
       ble_gap_adv_stop();
+      connecting = 0;
+      pairing = 0;
+   }
 
    /* Begin advertising */
+   if (direct)
+      connecting = 1;
+   if (pair)
+      pairing = 1;
    memset(&adv_params, 0, sizeof(adv_params));
-   adv_params.conn_mode = BLE_GAP_CONN_MODE_UND;
+   adv_params.conn_mode = (direct ? BLE_GAP_CONN_MODE_DIR : pair ? BLE_GAP_CONN_MODE_UND : BLE_GAP_CONN_MODE_NON);
    adv_params.disc_mode = (pair ? BLE_GAP_DISC_MODE_LTD : BLE_GAP_DISC_MODE_GEN);
-   if (ble_gap_adv_start(ble_addr_type, NULL, pair ? 30000 : BLE_HS_FOREVER, &adv_params, ble_gap_event, NULL))
-      ESP_LOGI(TAG, "Advertised start failed");
+   if (ble_gap_adv_start(ble_addr_type, direct, direct ? 1000 : pair ? 30000 : BLE_HS_FOREVER, &adv_params, ble_gap_event, NULL))
+      ESP_LOGE(TAG, "Advertised start failed");
 }
 
 static int ble_gap_event(struct ble_gap_event *event, void *arg)
@@ -405,7 +414,7 @@ static int ble_gap_event(struct ble_gap_event *event, void *arg)
    case BLE_GAP_EVENT_CONNECT:
       if (event->connect.status)
       {                         // Failed
-         ESP_LOGI(TAG, "Connect failed");
+         ESP_LOGE(TAG, "Connect failed");
          connected = 0;
          break;
       }
@@ -415,11 +424,13 @@ static int ble_gap_event(struct ble_gap_event *event, void *arg)
       {
          device_t *d = find_device(&c.peer_ota_addr);
          d->connected = 1;
-         ESP_LOGI(TAG, "Connected %s %s", ble_addr_format(&c.peer_ota_addr), c.role == BLE_GAP_ROLE_SLAVE ? "slave" : "master");
+         ESP_LOGI(TAG, "Connect %s %s%s%s%s", ble_addr_format(&c.peer_ota_addr), c.role == BLE_GAP_ROLE_SLAVE ? "slave" : "master", c.sec_state.encrypted ? " encrypted" : "", c.sec_state.authenticated ? " authenticated" : "", c.sec_state.bonded ? " bonded" : "");
+         if (memcmp(c.peer_ota_addr.val, c.peer_id_addr.val, 6))
+            ESP_LOGE(TAG, "Different ID address %s", ble_addr_format(&c.peer_id_addr));
          if (ble_gap_security_initiate(event->connect.conn_handle))
             ESP_LOGE(TAG, "Security failed");
       } else
-         ble_gap_terminate(event->enc_change.conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+         ble_gap_terminate(event->enc_change.conn_handle, BLE_ERR_RD_CONN_TERM_PWROFF);
       break;
 
    case BLE_GAP_EVENT_L2CAP_UPDATE_REQ:
@@ -439,11 +450,9 @@ static int ble_gap_event(struct ble_gap_event *event, void *arg)
          {
             ESP_LOGI(TAG, "Enc %s %s%s%s%s", ble_addr_format(&c.peer_ota_addr), c.role == BLE_GAP_ROLE_SLAVE ? "slave" : "master", c.sec_state.encrypted ? " encrypted" : "", c.sec_state.authenticated ? " authenticated" : "", c.sec_state.bonded ? " bonded" : "");
             if (memcmp(c.peer_ota_addr.val, c.peer_id_addr.val, 6))
-            {
                ESP_LOGE(TAG, "Different ID address %s", ble_addr_format(&c.peer_id_addr));
-            }
          }
-         ble_gap_terminate(event->enc_change.conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+         ble_gap_terminate(event->enc_change.conn_handle, BLE_ERR_RD_CONN_TERM_PWROFF);
          ble_gap_adv_stop();
          // TODO update based on pair logic for requested defcon
          // TODO how do we confirm the bonding data used?
@@ -458,11 +467,16 @@ static int ble_gap_event(struct ble_gap_event *event, void *arg)
       break;
 
    case BLE_GAP_EVENT_DISCONNECT:
-      ESP_LOGI(TAG, "Disconnected");
+      ESP_LOGI(TAG, "Disconnected reason %04X", event->disconnect.reason);
       connected = 0;
+      connecting = 0;
+      pairing = 0;
       break;
 
    case BLE_GAP_EVENT_ADV_COMPLETE:
+      connecting = 0;
+      pairing = 0;
+      ESP_LOGI(TAG, "Adv complete %04X", event->adv_complete.reason);
       break;
 
    case BLE_GAP_EVENT_SUBSCRIBE:
@@ -520,7 +534,7 @@ static int ble_gap_event(struct ble_gap_event *event, void *arg)
          if (o[-1] == ' ')
             o--;
          *o++ = 0;
-         ESP_LOGI(TAG, "Disc event %d, rssi %d, %s %s", event->disc.event_type, event->disc.rssi, ble_addr_format(&d->addr),msg);
+         ESP_LOGI(TAG, "Disc event %d, rssi %d, %s %s", event->disc.event_type, event->disc.rssi, ble_addr_format(&d->addr), msg);
          break;
       }
 
@@ -538,7 +552,7 @@ static void ble_start_disc(void)
       .passive = 1,
    };
    if (ble_gap_disc(0 /* public */ , BLE_HS_FOREVER, &disc_params, ble_gap_event, NULL))
-      ESP_LOGI(TAG, "Discover failed to start");
+      ESP_LOGE(TAG, "Discover failed to start");
    scanstart = uptime();
 }
 
@@ -640,7 +654,7 @@ void app_main()
    /* main loop */
    while (1)
    {
-      sleep(1);
+      usleep(100000);
       uint32_t now = uptime();
       // Devices missing
       if (ble_gap_disc_active() && scanstart + missingtime < now)
@@ -648,6 +662,7 @@ void app_main()
             if (!d->missing && d->last + (d->apple ? missingtime : 300) < now)
             {                   // Missing
                d->missing = 1;
+               d->connected = 0;
                ESP_LOGI(TAG, "Missing %s", ble_addr_format(&d->addr));
             }
       // Devices found
@@ -658,21 +673,25 @@ void app_main()
             ESP_LOGI(TAG, "Found %s", ble_addr_format(&d->addr));
          }
 
+      if (pairing || connecting || connected || ble_gap_conn_active())
+         continue;
+
       for (device_t * d = device; d; d = d->next)
          if (d->new)
          {                      // New devices
             d->new = 0;
             ESP_LOGI(TAG, "New %s", ble_addr_format(&d->addr));
-            // TODO We are going to need to do a short directed connection request to each new device
+            if (d->apple)
+            {
+               ble_advertise(0, &d->addr);
+               break;
+            }
          }
-
-      if (connected || ble_gap_conn_active())
-         continue;
 
       if (pair)
       {                         // Start pairing logic
          pair = 0;
-         ble_advertise(1);
+         ble_advertise(1, NULL);
       }
 
       if (!ble_gap_disc_active())
@@ -695,7 +714,7 @@ void app_main()
       }
 
       if (!ble_gap_adv_active())
-         ble_advertise(0);
+         ble_advertise(0, NULL);
    }
    return;
 }
