@@ -205,6 +205,7 @@ struct device_s {
    uint8_t len;                 // data len
    uint8_t data[31];            // data (adv)
    uint32_t last;               // uptime of last seen
+   int16_t temp;		// Temp
    uint8_t new:1;               // Should try a connection
    uint8_t connected:1;         // We have seen a connection
    uint8_t missing:1;           // Missing
@@ -502,6 +503,47 @@ static int ble_gap_event(struct ble_gap_event *event, void *arg)
             memcpy(d->data, event->disc.data, d->len);
          char msg[200],         // Message size very limited so always OK
          *o = msg;
+#if 1
+         while (p < e)
+	 {
+            const uint8_t *n = p + *p + 1;
+            if (n > e)
+               break;
+            const uint8_t *P = p + 1;
+	    o+=sprintf(o,"%02X:",*P++);
+	    if(p[1]==8||p[1]==9)
+	    {
+	       o+=sprintf(o,"\"");
+	       while(P<n)o+=sprintf(o,"%c",*P++);
+	       o+=sprintf(o,"\"");
+	    }else if(p[1]==0x16)
+	    {
+	       if(P[0]==0x6E&&P[1]==0x2A&&n==P+4)
+	       { // Temp
+		  int16_t v=((P[3]<<8)|P[2]);
+		  d->temp=v;
+		  if(v<0)
+		  {
+	             o+=sprintf(o,"-");
+	             v=-v;
+		  }
+		  o+=sprintf(o,"%d.%02d℃",v/100,v%100);
+	       }else
+	       {
+                  o+=sprintf(o,"%02X%02X=",P[0],P[1]);
+	          P+=2;
+	          while(P<n)
+	             o+=sprintf(o,"%02X",*P++);
+	       }
+	    }else
+	    {
+	       while(P<n)o+=sprintf(o,"%02X",*P++);
+	    }
+	    o+=sprintf(o," ");
+	    p=n;
+	 }
+#endif
+#if 0
          while (p < e)
          {
             const uint8_t *n = p + *p + 1;
@@ -529,6 +571,8 @@ static int ble_gap_event(struct ble_gap_event *event, void *arg)
             }
             p = n;
          }
+#endif
+
          if (o == msg)
             break;
          if (o[-1] == ' ')
