@@ -512,12 +512,12 @@ static int ble_gap_event(struct ble_gap_event *event, void *arg)
             const uint8_t *P = p + 1;
 	    o+=sprintf(o,"%02X:",*P++);
 	    if(p[1]==8||p[1]==9)
-	    {
+	    { // Name short or full
 	       o+=sprintf(o,"\"");
 	       while(P<n)o+=sprintf(o,"%c",*P++);
 	       o+=sprintf(o,"\"");
 	    }else if(p[1]==0x16)
-	    {
+	    { // 16 bit UUID and value
 	       if(P[0]==0x6E&&P[1]==0x2A&&n==P+4)
 	       { // Temp
 		  int16_t v=((P[3]<<8)|P[2]);
@@ -536,7 +536,7 @@ static int ble_gap_event(struct ble_gap_event *event, void *arg)
 	             o+=sprintf(o,"%02X",*P++);
 	       }
 	    }else
-	    {
+	    { // Other data just hex dumped
 	       while(P<n)o+=sprintf(o,"%02X",*P++);
 	    }
 	    o+=sprintf(o," ");
