@@ -32,6 +32,26 @@ const char TAG[] = "BlueCoinT";
 
 httpd_handle_t webserver = NULL;
 
+typedef struct device_s device_t;
+struct device_s {
+   device_t *next;              // Linked list
+   ble_addr_t addr;             // Address (includes type)
+   uint8_t namelen;             // Device name length
+   char name[32];               // Device name (null terminated)
+   char better[13];             // ID (Mac) of better device
+   int8_t betterrssi;           // Better RSSI
+   int8_t rssi;                 // RSSI
+   uint32_t lastbetter;         // uptime when last better entry
+   uint32_t last;               // uptime of last seen
+   uint32_t lastreport;         // uptime of last reported
+   int16_t temp;                // Temp
+   int16_t tempreport;          // Temp last reported
+   uint8_t found:1;
+   uint8_t missing:1;
+};
+device_t *device = NULL;
+device_t *find_device(ble_addr_t * a, int make);
+
 #define	settings		\
 	u32(missingtime,30)	\
 	u32(reporting,60)	\
@@ -52,19 +72,36 @@ settings
 #undef s
 const char *app_callback(int client, const char *prefix, const char *target, const char *suffix, jo_t j)
 {
-   char value[1000];
-   int len = 0;
-   *value = 0;
-   if (j)
-   {
-      len = jo_strncpy(j, value, sizeof(value));
-      if (len < 0)
-         return "Expecting JSON string";
-      if (len > sizeof(value))
-         return "Too long";
+   if (j && target && !strcmp(prefix, "info") && !strcmp(suffix, "report") && strlen(target) <= 12)
+   {                            // Other reports
+      ble_addr_t a = {.type = BLE_ADDR_PUBLIC };
+      if (jo_find(j, "rssi"))
+      {
+         int rssi = jo_read_int(j);
+         if (jo_find(j, "address"))
+         {
+            uint8_t add[18] = { 0 };
+            jo_strncpy(j, add, sizeof(add));
+            for (int i = 0; i < 6; i++)
+               a.val[5 - i] = (((isalpha(add[i * 3]) ? 9 : 0) + (add[i * 3] & 0xF)) << 4) + (isalpha(add[i * 3 + 1]) ? 9 : 0) + (add[i * 3 + 1] & 0xF);
+            device_t *d = find_device(&a, 0);
+            if (d)
+            {
+               int c = strcmp(target, d->better);
+               if (!c || !*d->better || rssi > d->rssi || (rssi == d->rssi && c > 0))
+               {                // Record best
+                  if (c)
+                  {
+                     strcpy(d->better, target);
+                     ESP_LOGI(TAG, "Found possibly better \"%s\" %s %d", d->name, target, rssi);
+                  }
+               }
+               d->betterrssi = rssi;
+               d->lastbetter = uptime();
+            }
+         }
+      }
    }
-   // TODO pick up other reports to know if we are closer
-
    if (client || !prefix || target || strcmp(prefix, prefixcommand) || !suffix)
       return NULL;              //Not for us or not a command from main MQTT
    if (!strcmp(suffix, "connect"))
@@ -84,21 +121,6 @@ const char *app_callback(int client, const char *prefix, const char *target, con
 
 /* BLE */
 
-typedef struct device_s device_t;
-struct device_s {
-   device_t *next;              // Linked list
-   ble_addr_t addr;             // Address (includes type)
-   uint8_t namelen;             // Device name length
-   char name[32];               // Device name (null terminated)
-   int8_t rssi;                 // RSSI
-   uint32_t last;               // uptime of last seen
-   uint32_t lastreport;         // uptime of last reported
-   int16_t temp;                // Temp
-   int16_t tempreport;          // Temp last reported
-   uint8_t found:1;
-   uint8_t missing:1;
-};
-device_t *device = NULL;
 
 struct ble_hs_cfg;
 struct ble_gatt_register_ctxt;
@@ -117,12 +139,14 @@ static const char *ble_addr_format(ble_addr_t * a)
    return buf;
 }
 
-device_t *find_device(ble_addr_t * a)
+device_t *find_device(ble_addr_t * a, int make)
 {                               // Find (create) a device record
    device_t *d;
    for (d = device; d; d = d->next)
       if (d->addr.type == a->type && !memcmp(d->addr.val, a->val, 6))
          break;
+   if (!d && !make)
+      return d;
    if (!d)
    {
       d = malloc(sizeof(*d));
@@ -130,11 +154,6 @@ device_t *find_device(ble_addr_t * a)
       d->addr = *a;
       d->next = device;
       device = d;
-      d->found = 1;
-   }
-   if (d->missing)
-   {
-      d->missing = 0;
       d->found = 1;
    }
    d->last = uptime();
@@ -169,7 +188,7 @@ static int ble_gap_event(struct ble_gap_event *event, void *arg)
          }
          if (!temp || !name)
             break;              // Not temp device
-         device_t *d = find_device(&event->disc.addr);
+         device_t *d = find_device(&event->disc.addr, 1);
          if (d->namelen != *name - 1 || memcmp(d->name, name + 2, d->namelen))
          {
             memcpy(d->name, name + 2, d->namelen = *name - 1);
@@ -179,7 +198,13 @@ static int ble_gap_event(struct ble_gap_event *event, void *arg)
             d->temp = ((temp[5] << 8) | temp[4]);
          // TODO bat
          d->rssi = event->disc.rssi;
-         ESP_LOGI(TAG, "Temp %s %d", d->name, d->temp);
+         if (d->missing)
+         {
+            d->lastreport = 0;
+            d->missing = 0;
+            d->found = 1;
+         }
+         ESP_LOGI(TAG, "Temp \"%s\" %d %d", d->name, d->temp, d->rssi);
          break;
       }
 
@@ -276,7 +301,7 @@ void app_main()
       uint32_t now = uptime();
       // Devices missing
       for (device_t * d = device; d; d = d->next)
-         if (!d->missing && d->last + missingtime < now)
+         if (!d->missing && d->last + missingtime < now && !*d->better)
          {                      // Missing
             d->missing = 1;
             jo_t j = jo_device(d);
@@ -292,10 +317,20 @@ void app_main()
             revk_event("found", &j);
             ESP_LOGI(TAG, "Found %s", ble_addr_format(&d->addr));
          }
+      for (device_t * d = device; d; d = d->next)
+         if (*d->better && d->lastbetter + reporting * 3 / 2 < now)
+            *d->better = 0;     // Not seeing better
       // Reporting
       for (device_t * d = device; d; d = d->next)
          if (!d->missing && (d->lastreport + reporting <= now || d->tempreport + temprise < d->temp))
          {
+            d->lastreport = now;
+            d->tempreport = d->temp;
+            if (*d->better && (d->betterrssi > d->rssi || (d->betterrssi == d->rssi && strcmp(d->better, revk_id) > 0)))
+            {
+               ESP_LOGI(TAG, "Not reporting \"%s\" %d as better %s %d", d->name, d->rssi, d->better, d->betterrssi);
+               continue;
+            }
             jo_t j = jo_device(d);
             if (d->temp < 0)
                jo_litf(j, "temp", "-%d.%02d", (-d->temp) / 100, (-d->temp) % 100);
@@ -304,9 +339,7 @@ void app_main()
             jo_int(j, "rssi", d->rssi);
             // TODO bat
             revk_info("report", &j);
-            d->lastreport = now;
-            d->tempreport = d->temp;
-            ESP_LOGI(TAG, "Report %s", ble_addr_format(&d->addr));
+            ESP_LOGI(TAG, "Report %s \"%s\" %d (%s %d)", ble_addr_format(&d->addr), d->name, d->rssi, d->better, d->betterrssi);
             // TODO listening and only reporting if we are better rssi than other reports
          }
 
