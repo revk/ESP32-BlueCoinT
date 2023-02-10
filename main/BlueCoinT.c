@@ -301,11 +301,9 @@ void app_main()
       uint32_t now = uptime();
       // Devices missing
       for (device_t * d = device; d; d = d->next)
-         if (!d->missing && d->last + missingtime < now && !*d->better)
+         if (!d->missing && d->last + missingtime < now)
          {                      // Missing
             d->missing = 1;
-            jo_t j = jo_device(d);
-            revk_event("missing", &j);
             ESP_LOGI(TAG, "Missing %s", ble_addr_format(&d->addr));
          }
       // Devices found
@@ -313,8 +311,6 @@ void app_main()
          if (d->found)
          {
             d->found = 0;
-            jo_t j = jo_device(d);
-            revk_event("found", &j);
             ESP_LOGI(TAG, "Found %s", ble_addr_format(&d->addr));
          }
       for (device_t * d = device; d; d = d->next)
