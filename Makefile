@@ -3,7 +3,7 @@
 # project subdirectory.
 #
 
-PROJECT_NAME := DEFCON
+PROJECT_NAME := BlueCoinT
 SUFFIX := $(shell components/ESP32-RevK/buildsuffix)
 
 all:	
@@ -45,28 +45,3 @@ pull:
 update:
 	git submodule update --init --recursive --remote
 	git commit -a -m "Library update"
-
-# Set GPIO low (whichever CBUS is set to mode 8/GPIO)
-bootmode: ftdizap/ftdizap
-	./ftdizap/ftdizap --cbus=0
-
-# Flash with GPIO control using CBUS0 (FT230X design)
-zap:    bootmode flash
-	./ftdizap/ftdizap --cbus=1 --reset
-
-# Program the FTDI
-ftdi: ftdizap/ftdizap
-	./ftdizap/ftdizap --serial="RevK" --description="DEFCON" --cbus0-mode=7 --cbus1-mode=13
-
-PCBCase/case: PCBCase/case.c
-	make -C PCBCase
-
-%.stl: %.scad
-	echo "Making $@"
-	/Applications/OpenSCAD.app/Contents/MacOS/OpenSCAD $< -o $@
-	echo "Made $@"
-
-stl:	PCB/DEFCON/DEFCON.stl
-
-PCB/DEFCON/DEFCON.scad: PCB/DEFCON/DEFCON.kicad_pcb PCBCase/case Makefile
-	PCBCase/case -o $@ $< --edge=2 --base=2

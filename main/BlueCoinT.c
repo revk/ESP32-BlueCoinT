@@ -1,8 +1,8 @@
-/* DEFCON app */
+/* BlueCoinT app */
 /* Copyright ©2022 - 2023 Adrian Kennard, Andrews & Arnold Ltd.See LICENCE file for details .GPL 3.0 */
 
 static __attribute__((unused))
-const char TAG[] = "DEFCON";
+const char TAG[] = "BlueCoinT";
 
 #include "revk.h"
 #include "esp_sleep.h"
@@ -62,104 +62,7 @@ settings
 #undef u8
 #undef b
 #undef s
-    int8_t defcon_level = 9;
 uint8_t pair = 0;               // pairing needed
-
-static void web_head(httpd_req_t * req, const char *title)
-{
-   httpd_resp_set_type(req, "text/html; charset=utf-8");
-   httpd_resp_sendstr_chunk(req, "<meta name='viewport' content='width=device-width, initial-scale=1'>");
-   httpd_resp_sendstr_chunk(req, "<html><head><title>");
-   if (title)
-      httpd_resp_sendstr_chunk(req, title);
-   httpd_resp_sendstr_chunk(req, "</title></head><style>"       //
-                            "a.defcon{text-decoration:none;border:1px solid black;border-radius:50%;margin:2px;padding:3px;display:inline-block;width:1em;text-align:center;}"  //
-                            "a.on{border:3px solid black;}"     //
-                            "a.d1{background-color:white;}"     //
-                            "a.d2{background-color:red;}"       //
-                            "a.d3{background-color:yellow;}"    //
-                            "a.d4{background-color:green;color:white;}" //
-                            "a.d5{background-color:blue;color:white;}"  //
-                            "body{font-family:sans-serif;background:#8cf;}"     //
-                            "</style><body><h1>");
-   if (title)
-      httpd_resp_sendstr_chunk(req, title);
-   httpd_resp_sendstr_chunk(req, "</h1>");
-}
-
-static esp_err_t web_foot(httpd_req_t * req)
-{
-   httpd_resp_sendstr_chunk(req, "<hr><address>");
-   char temp[20];
-   snprintf(temp, sizeof(temp), "%012llX", revk_binid);
-   httpd_resp_sendstr_chunk(req, temp);
-   httpd_resp_sendstr_chunk(req, " <a href='wifi'>WiFi Setup</a></address></body></html>");
-   httpd_resp_sendstr_chunk(req, NULL);
-   return ESP_OK;
-}
-
-static esp_err_t web_icon(httpd_req_t * req)
-{                               // serve image -  maybe make more generic file serve
-   extern const char start[] asm("_binary_apple_touch_icon_png_start");
-   extern const char end[] asm("_binary_apple_touch_icon_png_end");
-   httpd_resp_set_type(req, "image/png");
-   httpd_resp_send(req, start, end - start);
-   return ESP_OK;
-}
-
-static esp_err_t web_root(httpd_req_t * req)
-{
-   if (revk_link_down())
-      return revk_web_config(req);      // Direct to web set up
-   web_head(req, *hostname ? hostname : appname);
-   size_t len = httpd_req_get_url_query_len(req);
-   char q[2] = { };
-   if (len == 1)
-   {
-      httpd_req_get_url_query_str(req, q, sizeof(q));
-      if (isdigit((int) *q))
-         defcon_level = *q - '0';
-      else if (*q == '+' && defcon_level < 9)
-         defcon_level++;
-      else if (*q == '-' && defcon_level > 0)
-         defcon_level--;
-   }
-   for (int i = 0; i <= 9; i++)
-      if (i <= 6 || i == 9)
-      {
-         q[0] = '0' + i;
-         httpd_resp_sendstr_chunk(req, "<a href='?");
-         httpd_resp_sendstr_chunk(req, q);
-         httpd_resp_sendstr_chunk(req, "' class='defcon d");
-         httpd_resp_sendstr_chunk(req, q);
-         if (i == defcon_level)
-            httpd_resp_sendstr_chunk(req, " on");
-         httpd_resp_sendstr_chunk(req, "'>");
-         httpd_resp_sendstr_chunk(req, i == 9 ? "X" : q);
-         httpd_resp_sendstr_chunk(req, "</a>");
-      }
-   return web_foot(req);
-}
-
-char *setdefcon(int level, char *value)
-{                               // DEFCON state
-   // With value it is used to turn on/off a defcon state, the lowest set dictates the defcon level
-   // With no value, this sets the DEFCON state directly instead of using lowest of state set
-   static uint8_t state = 0;    // DEFCON state
-   if (*value)
-   {
-      if (*value == '1' || *value == 't' || *value == 'y')
-         state |= (1 << level);
-      else
-         state &= ~(1 << level);
-      int l;
-      for (l = 0; l < 8 && !(state & (1 << l)); l++);
-      defcon_level = l;
-   } else
-      defcon_level = level;
-   // TODO flag DEFCON changed?
-   return "";
-}
 
 const char *app_callback(int client, const char *prefix, const char *target, const char *suffix, jo_t j)
 {
@@ -174,14 +77,10 @@ const char *app_callback(int client, const char *prefix, const char *target, con
       if (len > sizeof(value))
          return "Too long";
    }
-   if (prefix && !strcmp(prefix, TAG) && target && isdigit((int) *target) && !target[1])
-      return setdefcon(*target - '0', value);
    if (client || !prefix || target || strcmp(prefix, prefixcommand) || !suffix)
       return NULL;              //Not for us or not a command from main MQTT
-   if (isdigit((int) *suffix) && !suffix[1])
-      return setdefcon(*suffix - '0', value);
    if (!strcmp(suffix, "connect"))
-      lwmqtt_subscribe(revk_mqtt(0), "DEFCON/#");
+      lwmqtt_subscribe(revk_mqtt(0), "BlueCoinT/#");
    if (!strcmp(suffix, "shutdown"))
       httpd_stop(webserver);
    if (!strcmp(suffix, "upgrade"))
@@ -212,7 +111,7 @@ struct device_s {
    uint8_t found:1;             // Found
    uint8_t apple:1;             // Found apple
    uint8_t nearby:1;            // Found apple nearby adv
-   // TODO what DEFCON
+   // TODO what BlueCoinT
 };
 device_t *device = NULL;
 
@@ -277,7 +176,7 @@ static int ble_gap_event(struct ble_gap_event *event, void *arg);
 static uint8_t ble_addr_type;
 
 static const char *manuf_name = "RevK";
-static const char *model_num = "DEFCON Lights";
+static const char *model_num = "BlueCoinT";
 
 static const struct ble_gatt_svc_def gatt_svr_svcs[] = {
    {
@@ -380,9 +279,8 @@ static void ble_advertise(uint8_t pair, ble_addr_t * direct)
 
    static uint8_t name[sizeof(TAG)];
    memcpy(name, TAG, sizeof(TAG) - 1);
-   name[sizeof(TAG) - 1] = '0' + defcon_level;  // TODO should be the pair level we are setting really
    fields.name = name;
-   fields.name_len = sizeof(TAG) - ((defcon_level < 0 || defcon_level > 9) ? 1 : 0);
+   fields.name_len = sizeof(TAG) - 1;
    fields.name_is_complete = 1;
 
    rc = ble_gap_adv_set_fields(&fields);
@@ -646,39 +544,6 @@ void app_main()
 #undef s
        revk_start();
 
-   // Web interface
-   httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-   if (!httpd_start(&webserver, &config))
-   {
-      {
-         httpd_uri_t uri = {
-            .uri = "/",
-            .method = HTTP_GET,
-            .handler = web_root,
-            .user_ctx = NULL
-         };
-         REVK_ERR_CHECK(httpd_register_uri_handler(webserver, &uri));
-      }
-      {
-         httpd_uri_t uri = {
-            .uri = "/apple-touch-icon.png",
-            .method = HTTP_GET,
-            .handler = web_icon,
-            .user_ctx = NULL
-         };
-         REVK_ERR_CHECK(httpd_register_uri_handler(webserver, &uri));
-      }
-      {
-         httpd_uri_t uri = {
-            .uri = "/wifi",
-            .method = HTTP_GET,
-            .handler = revk_web_config,
-            .user_ctx = NULL
-         };
-         REVK_ERR_CHECK(httpd_register_uri_handler(webserver, &uri));
-      }
-      revk_web_config_start(webserver);
-   }
    REVK_ERR_CHECK(esp_wifi_set_ps(WIFI_PS_MIN_MODEM));  /* default mode, but library may have overridden, needed for BLE at same time as wifi */
    nimble_port_init();
 

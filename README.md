@@ -1,3 +1,3 @@
-# ESP32-DEFCON
+# ESP32-BlueCoinT
 
-TBA
+WiFi/MQTT reporting of BLE temperature sensors
