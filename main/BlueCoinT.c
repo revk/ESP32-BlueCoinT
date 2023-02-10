@@ -274,41 +274,41 @@ void app_main()
    {
       usleep(100000);
       uint32_t now = uptime();
-         // Devices missing
-         for (device_t * d = device; d; d = d->next)
-            if (!d->missing && d->last + missingtime < now)
-            {                   // Missing
-               d->missing = 1;
-               jo_t j = jo_device(d);
-               revk_event("missing", &j);
-               ESP_LOGI(TAG, "Missing %s", ble_addr_format(&d->addr));
-            }
-         // Devices found
-         for (device_t * d = device; d; d = d->next)
-            if (d->found)
-            {
-               d->found = 0;
-               jo_t j = jo_device(d);
-               revk_event("found", &j);
-               ESP_LOGI(TAG, "Found %s", ble_addr_format(&d->addr));
-            }
-         // Reporting
-         for (device_t * d = device; d; d = d->next)
-            if (!d->missing && (d->lastreport + reporting < now || d->tempreport + temprise < d->temp))
-            {
-               jo_t j = jo_device(d);
-               if (d->temp < 0)
-                  jo_litf(j, "temp", "-%d.%02d", (-d->temp) / 100, (-d->temp) % 100);
-               else
-                  jo_litf(j, "temp", "%d.%02d", d->temp / 100, d->temp % 100);
-               jo_int(j, "rssi", d->rssi);
-               // TODO bat
-               revk_info("report", &j);
-               d->lastreport = now;
-               d->tempreport = d->temp;
-               ESP_LOGI(TAG, "Report %s", ble_addr_format(&d->addr));
-               // TODO listening and only reporting if we are better rssi than other reports
-            }
+      // Devices missing
+      for (device_t * d = device; d; d = d->next)
+         if (!d->missing && d->last + missingtime < now)
+         {                      // Missing
+            d->missing = 1;
+            jo_t j = jo_device(d);
+            revk_event("missing", &j);
+            ESP_LOGI(TAG, "Missing %s", ble_addr_format(&d->addr));
+         }
+      // Devices found
+      for (device_t * d = device; d; d = d->next)
+         if (d->found)
+         {
+            d->found = 0;
+            jo_t j = jo_device(d);
+            revk_event("found", &j);
+            ESP_LOGI(TAG, "Found %s", ble_addr_format(&d->addr));
+         }
+      // Reporting
+      for (device_t * d = device; d; d = d->next)
+         if (!d->missing && (d->lastreport + reporting <= now || d->tempreport + temprise < d->temp))
+         {
+            jo_t j = jo_device(d);
+            if (d->temp < 0)
+               jo_litf(j, "temp", "-%d.%02d", (-d->temp) / 100, (-d->temp) % 100);
+            else
+               jo_litf(j, "temp", "%d.%02d", d->temp / 100, d->temp % 100);
+            jo_int(j, "rssi", d->rssi);
+            // TODO bat
+            revk_info("report", &j);
+            d->lastreport = now;
+            d->tempreport = d->temp;
+            ESP_LOGI(TAG, "Report %s", ble_addr_format(&d->addr));
+            // TODO listening and only reporting if we are better rssi than other reports
+         }
 
       if (!ble_gap_disc_active())
       {                         // Restart discovery, but first should be safe to check for deletions
