@@ -18,8 +18,6 @@ const char TAG[] = "BlueCoinT";
 #include "console/console.h"
 #include "host/ble_hs.h"
 #include "host/ble_uuid.h"
-#include "services/gap/ble_svc_gap.h"
-#include "services/gatt/ble_svc_gatt.h"
 
 #include <driver/gpio.h>
 
@@ -62,7 +60,6 @@ settings
 #undef u8
 #undef b
 #undef s
-uint8_t pair = 0;               // pairing needed
 
 const char *app_callback(int client, const char *prefix, const char *target, const char *suffix, jo_t j)
 {
@@ -89,8 +86,6 @@ const char *app_callback(int client, const char *prefix, const char *target, con
       esp_wifi_set_ps(WIFI_PS_NONE);    // Fulk wifi
       revk_restart("Download started", 10);     // Restart if download does not happen properly
    }
-   if (!strcmp(suffix, "pair"))
-      pair = 1;                 // TODO test pairing mode
    return NULL;
 }
 
@@ -114,15 +109,6 @@ struct device_s {
    // TODO what BlueCoinT
 };
 device_t *device = NULL;
-
-uint8_t connected = 0;
-uint8_t connecting = 0;
-uint8_t pairing = 0;
-uint32_t scanstart = 0;
-
-#define GATT_DEVICE_INFO_UUID                   0x180A
-#define GATT_MANUFACTURER_NAME_UUID             0x2A29
-#define GATT_MODEL_NUMBER_UUID                  0x2A24
 
 struct ble_hs_cfg;
 struct ble_gatt_register_ctxt;
@@ -167,227 +153,12 @@ device_t *find_device(ble_addr_t * a)
    return d;
 }
 
-static int gatt_svr_chr_access_device_info(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt, void *arg);
-
-int gatt_svr_init(void);
-
-static int ble_gap_event(struct ble_gap_event *event, void *arg);
-
-static uint8_t ble_addr_type;
-
-static const char *manuf_name = "RevK";
-static const char *model_num = "BlueCoinT";
-
-static const struct ble_gatt_svc_def gatt_svr_svcs[] = {
-   {
-    /* Service: Device Information */
-    .type = BLE_GATT_SVC_TYPE_PRIMARY,
-    .uuid = BLE_UUID16_DECLARE(GATT_DEVICE_INFO_UUID),
-    .characteristics = (struct ble_gatt_chr_def[])
-    {
-     {
-      /* Characteristic: * Manufacturer name */
-      .uuid = BLE_UUID16_DECLARE(GATT_MANUFACTURER_NAME_UUID),
-      .access_cb = gatt_svr_chr_access_device_info,
-      .flags = BLE_GATT_CHR_F_READ,
-      },
-     {
-      /* Characteristic: Model number string */
-      .uuid = BLE_UUID16_DECLARE(GATT_MODEL_NUMBER_UUID),
-      .access_cb = gatt_svr_chr_access_device_info,
-      .flags = BLE_GATT_CHR_F_READ,
-      },
-     {
-      0,                        /* No more characteristics in this service */
-      },
-     }
-     },
-
-   {
-    0,                          /* No more services */
-     },
-};
-
-static int gatt_svr_chr_access_device_info(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt, void *arg)
-{
-   uint16_t uuid;
-   int rc;
-
-   uuid = ble_uuid_u16(ctxt->chr->uuid);
-
-   if (uuid == GATT_MODEL_NUMBER_UUID)
-   {
-      rc = os_mbuf_append(ctxt->om, model_num, strlen(model_num));
-      return rc == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
-   }
-
-   if (uuid == GATT_MANUFACTURER_NAME_UUID)
-   {
-      rc = os_mbuf_append(ctxt->om, manuf_name, strlen(manuf_name));
-      return rc == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
-   }
-
-   assert(0);
-   return BLE_ATT_ERR_UNLIKELY;
-}
-
-int gatt_svr_init(void)
-{
-   int rc;
-
-   ble_svc_gap_init();
-   ble_svc_gatt_init();
-
-   rc = ble_gatts_count_cfg(gatt_svr_svcs);
-   if (rc != 0)
-   {
-      return rc;
-   }
-
-   rc = ble_gatts_add_svcs(gatt_svr_svcs);
-   if (rc != 0)
-   {
-      return rc;
-   }
-
-   return 0;
-}
-
-/*
- * Enables advertising with parameters:
- *     o General discoverable mode
- *     o Undirected connectable mode
- */
-static void ble_advertise(uint8_t pair, ble_addr_t * direct)
-{
-   struct ble_gap_adv_params adv_params;
-   struct ble_hs_adv_fields fields;
-   int rc;
-
-   memset(&fields, 0, sizeof(fields));
-   fields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
-
-   static const uint8_t svc[] = { 0x12, 0x18 }; // HID - gets iPhone attention
-   fields.svc_data_uuid16 = svc;
-   fields.svc_data_uuid16_len = 2;
-
-   fields.appearance = 0x0140;  // Generic display
-   fields.appearance_is_present = 1;
-
-   fields.tx_pwr_lvl_is_present = 1;
-   fields.tx_pwr_lvl = BLE_HS_ADV_TX_PWR_LVL_AUTO;
-
-   static uint8_t name[sizeof(TAG)];
-   memcpy(name, TAG, sizeof(TAG) - 1);
-   fields.name = name;
-   fields.name_len = sizeof(TAG) - 1;
-   fields.name_is_complete = 1;
-
-   rc = ble_gap_adv_set_fields(&fields);
-   if (rc != 0)
-      return;
-
-   if (ble_gap_adv_active())
-   {
-      ble_gap_adv_stop();
-      connecting = 0;
-      pairing = 0;
-   }
-
-   /* Begin advertising */
-   if (direct)
-      connecting = 1;
-   if (pair)
-      pairing = 1;
-   memset(&adv_params, 0, sizeof(adv_params));
-   adv_params.conn_mode = (direct ? BLE_GAP_CONN_MODE_DIR : pair ? BLE_GAP_CONN_MODE_UND : BLE_GAP_CONN_MODE_NON);
-   adv_params.disc_mode = (pair ? BLE_GAP_DISC_MODE_LTD : BLE_GAP_DISC_MODE_GEN);
-   if (ble_gap_adv_start(ble_addr_type, direct, direct ? 2000 : pair ? 30000 : BLE_HS_FOREVER, &adv_params, ble_gap_event, NULL))
-      ESP_LOGE(TAG, "Advertised start failed");
-}
-
 static int ble_gap_event(struct ble_gap_event *event, void *arg)
 {
    switch (event->type)
    {
-   case BLE_GAP_EVENT_CONNECT:
-      if (event->connect.status)
-      {                         // Failed
-         ESP_LOGE(TAG, "Connect failed");
-         connected = 0;
-         break;
-      }
-      connected = 1;
-      struct ble_gap_conn_desc c;
-      if (!ble_gap_conn_find(event->connect.conn_handle, &c))
-      {
-         device_t *d = find_device(&c.peer_ota_addr);
-         d->connected = 1;
-         ESP_LOGI(TAG, "Connect %s %s%s%s%s", ble_addr_format(&c.peer_ota_addr), c.role == BLE_GAP_ROLE_SLAVE ? "slave" : "master", c.sec_state.encrypted ? " encrypted" : "", c.sec_state.authenticated ? " authenticated" : "", c.sec_state.bonded ? " bonded" : "");
-         if (memcmp(c.peer_ota_addr.val, c.peer_id_addr.val, 6))
-            ESP_LOGE(TAG, "Different ID address %s", ble_addr_format(&c.peer_id_addr));
-         if (ble_gap_security_initiate(event->connect.conn_handle))
-            ESP_LOGE(TAG, "Security failed");
-      } else
-         ble_gap_terminate(event->enc_change.conn_handle, BLE_ERR_RD_CONN_TERM_PWROFF);
-      break;
-
-   case BLE_GAP_EVENT_L2CAP_UPDATE_REQ:
-      ESP_LOGI(TAG, "L2CAP update req");
-      return 1;
-
-   case BLE_GAP_EVENT_CONN_UPDATE:
-      {
-         ESP_LOGI(TAG, "Update");
-      }
-      break;
-
-   case BLE_GAP_EVENT_ENC_CHANGE:
-      {
-         struct ble_gap_conn_desc c;
-         if (!ble_gap_conn_find(event->enc_change.conn_handle, &c))
-         {
-            ESP_LOGI(TAG, "Enc %s %s%s%s%s", ble_addr_format(&c.peer_ota_addr), c.role == BLE_GAP_ROLE_SLAVE ? "slave" : "master", c.sec_state.encrypted ? " encrypted" : "", c.sec_state.authenticated ? " authenticated" : "", c.sec_state.bonded ? " bonded" : "");
-            if (memcmp(c.peer_ota_addr.val, c.peer_id_addr.val, 6))
-               ESP_LOGE(TAG, "Different ID address %s", ble_addr_format(&c.peer_id_addr));
-         }
-         ble_gap_terminate(event->enc_change.conn_handle, BLE_ERR_RD_CONN_TERM_PWROFF);
-         ble_gap_adv_stop();
-         // TODO update based on pair logic for requested defcon
-         // TODO how do we confirm the bonding data used?
-      }
-      break;
-   case BLE_GAP_EVENT_REPEAT_PAIRING:
-
-      return BLE_GAP_REPEAT_PAIRING_RETRY;
-
-   case BLE_GAP_EVENT_IDENTITY_RESOLVED:
-      ESP_LOGI(TAG, "Resolved");
-      break;
-
-   case BLE_GAP_EVENT_DISCONNECT:
-      ESP_LOGI(TAG, "Disconnected reason %04X", event->disconnect.reason);
-      connected = 0;
-      connecting = 0;
-      pairing = 0;
-      break;
-
-   case BLE_GAP_EVENT_ADV_COMPLETE:
-      connecting = 0;
-      pairing = 0;
-      ESP_LOGI(TAG, "Adv complete %04X", event->adv_complete.reason);
-      break;
-
-   case BLE_GAP_EVENT_SUBSCRIBE:
-      break;
-
-   case BLE_GAP_EVENT_MTU:
-      break;
-
    case BLE_GAP_EVENT_DISC:
       {
-         if (event->disc.event_type)
-            break;              // Not simple adv
          const uint8_t *p = event->disc.data,
              *e = p + event->disc.length_data;
          if (e > p + 31)
@@ -401,7 +172,6 @@ static int ble_gap_event(struct ble_gap_event *event, void *arg)
             memcpy(d->data, event->disc.data, d->len);
          char msg[200],         // Message size very limited so always OK
          *o = msg;
-#if 1
          while (p < e)
 	 {
             const uint8_t *n = p + *p + 1;
@@ -440,37 +210,6 @@ static int ble_gap_event(struct ble_gap_event *event, void *arg)
 	    o+=sprintf(o," ");
 	    p=n;
 	 }
-#endif
-#if 0
-         while (p < e)
-         {
-            const uint8_t *n = p + *p + 1;
-            if (n > e)
-               break;
-            if (*p > 3 && p[1] == 0xFF && p[2] == 0x4C && p[3] == 0x00)
-            {                   // Apple
-               d->apple = 1;
-               const uint8_t *P = p + 4;
-               while (P + 1 < n)
-               {
-                  const uint8_t *N = P + P[1] + 2;
-                  if (N > n)
-                     break;
-                  if (*P == 0x10)
-                  {
-                     d->nearby = 1;
-                     o += sprintf(o, "Nearby ");
-                     const uint8_t *Q = P + 2;
-                     while (Q < N)
-                        o += sprintf(o, "%02X ", *Q++);
-                  }
-                  P = N;
-               }
-            }
-            p = n;
-         }
-#endif
-
          if (o == msg)
             break;
          if (o[-1] == ' ')
@@ -495,9 +234,9 @@ static void ble_start_disc(void)
    };
    if (ble_gap_disc(0 /* public */ , BLE_HS_FOREVER, &disc_params, ble_gap_event, NULL))
       ESP_LOGE(TAG, "Discover failed to start");
-   scanstart = uptime();
 }
 
+static uint8_t ble_addr_type;
 static void ble_on_sync(void)
 {
    int rc;
@@ -523,7 +262,6 @@ void ble_task(void *param)
 
    nimble_port_freertos_deinit();
 }
-
 
 /* MAIN */
 void app_main()
@@ -555,9 +293,6 @@ void app_main()
    ble_hs_cfg.sm_bonding = 1;
    ble_hs_cfg.sm_io_cap = BLE_SM_IO_CAP_NO_IO;
 
-   gatt_svr_init();
-   ble_svc_gap_device_name_set(TAG);
-
    /* Start the task */
    nimble_port_freertos_init(ble_task);
 
@@ -567,7 +302,6 @@ void app_main()
       usleep(100000);
       uint32_t now = uptime();
       // Devices missing
-      if (ble_gap_disc_active() && scanstart + missingtime < now)
          for (device_t * d = device; d; d = d->next)
             if (!d->missing && d->last + (d->apple ? missingtime : 300) < now)
             {                   // Missing
@@ -581,28 +315,6 @@ void app_main()
          {
             d->found = 0;
             ESP_LOGI(TAG, "Found %s", ble_addr_format(&d->addr));
-         }
-
-      if (pairing || connecting || connected || ble_gap_conn_active())
-         continue;
-
-      if (pair)
-      {                         // Start pairing logic
-         pair = 0;
-         ble_advertise(1, NULL);
-	 continue;
-      }
-
-      for (device_t * d = device; d; d = d->next)
-         if (d->new)
-         {                      // New devices
-            d->new = 0;
-            ESP_LOGI(TAG, "New %s", ble_addr_format(&d->addr));
-            if (d->apple)
-            {
-               ble_advertise(0, &d->addr);
-               break;
-            }
          }
 
       if (!ble_gap_disc_active())
@@ -623,9 +335,6 @@ void app_main()
          }
          ble_start_disc();
       }
-
-      if (!ble_gap_adv_active())
-         ble_advertise(0, NULL);
    }
    return;
 }
