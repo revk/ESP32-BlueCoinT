@@ -46,6 +46,8 @@ struct device_s {
    uint32_t lastreport;         // uptime of last reported
    int16_t temp;                // Temp
    int16_t tempreport;          // Temp last reported
+				uint16_t volt;	// Bat voltage
+   int8_t bat;                // Bat %
    uint8_t found:1;
    uint8_t missing:1;
 };
@@ -170,10 +172,14 @@ static int ble_gap_event(struct ble_gap_event *event, void *arg)
              *e = p + event->disc.length_data;
          if (e > p + 31)
             break;              // Silly
+         device_t *d = find_device(&event->disc.addr, 0);
+	 if(d)ESP_LOG_BUFFER_HEX(event->disc.event_type==BLE_HCI_ADV_RPT_EVTYPE_SCAN_RSP?"Rsp":"Adv",event->disc.data,event->disc.length_data);
          // Check if a temp device
          const uint8_t *name = NULL;
          const uint8_t *temp = NULL;
-         //const uint8_t *bat = NULL;
+	 const uint8_t * bat=0;
+	 const uint8_t * volt=0;
+	 const uint8_t * man=0;
          while (p < e)
          {
             const uint8_t *n = p + *p + 1;
@@ -182,21 +188,37 @@ static int ble_gap_event(struct ble_gap_event *event, void *arg)
             if (p[0] > 1 && (p[1] == 8 || p[1] == 9))
                name = p;
             else if (*p == 5 && p[1] == 0x16 && p[2] == 0x6E && p[3] == 0x2A)
-               temp = p;
-            // TODO bat
+               temp = p+4;
+            else if (*p == 4 && p[1] == 0x16 && p[2] == 0x0F && p[3] == 0x18)
+               bat = p+4;
+            else if (*p == 4 && p[1] == 0x16 && p[2] == 0x19 && p[3] == 0x2A)
+               bat = p+4;
+	    if(*p>=3&&p[1]==0xFF)
+	    {man=((p[3]<<8)|p[2]);
+		    if(man==0x757)
+		    {
+			    if(*p==5&&p[4]==0xF1)
+		    bat=p+5;
+			    else if(*p==6&&p[4]==0xF2)
+		    volt=p+5;
+			    else if(*p==6&&p[4]==0x12)
+		    temp=p+5;
+		    }
+	    }
             p = n;
          }
-         if (!temp || !name)
+         if (!d&&man!=0x0757&&(!temp || !name))
             break;              // Not temp device
-         device_t *d = find_device(&event->disc.addr, 1);
+         if(!d)d = find_device(&event->disc.addr, 1);
          if (d->namelen != *name - 1 || memcmp(d->name, name + 2, d->namelen))
          {
             memcpy(d->name, name + 2, d->namelen = *name - 1);
             d->name[d->namelen] = 0;
          }
          if (temp)
-            d->temp = ((temp[5] << 8) | temp[4]);
-         // TODO bat
+            d->temp = ((temp[1] << 8) | temp[0]);
+         if (bat)d->bat=*bat;
+         if (volt)d->volt=((volt[1]<<8)+volt[0]);;
          d->rssi = event->disc.rssi;
          if (d->missing)
          {
@@ -204,7 +226,7 @@ static int ble_gap_event(struct ble_gap_event *event, void *arg)
             d->missing = 0;
             d->found = 1;
          }
-         ESP_LOGI(TAG, "Temp \"%s\" %d %d", d->name, d->temp, d->rssi);
+         ESP_LOGI(TAG, "Temp \"%s\" T%d B%d V%d R%d", d->name, d->temp, d->bat,d->volt,d->rssi);
          break;
       }
 
@@ -332,11 +354,13 @@ void app_main()
                jo_litf(j, "temp", "-%d.%02d", (-d->temp) / 100, (-d->temp) % 100);
             else
                jo_litf(j, "temp", "%d.%02d", d->temp / 100, d->temp % 100);
+	    if(d->bat)
+               jo_litf(j, "bat", "%d", d->bat);
+	    if(d->volt)
+               jo_litf(j, "voltage", "%d.%03d", d->volt / 1000, d->volt % 1000);
             jo_int(j, "rssi", d->rssi);
-            // TODO bat
             revk_info("report", &j);
             ESP_LOGI(TAG, "Report %s \"%s\" %d (%s %d)", ble_addr_format(&d->addr), d->name, d->rssi, d->better, d->betterrssi);
-            // TODO listening and only reporting if we are better rssi than other reports
          }
 
       if (!ble_gap_disc_active())
