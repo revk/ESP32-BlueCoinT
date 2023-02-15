@@ -1,0 +1,156 @@
+// ELA BlueCoin stuff
+static __attribute__((unused))
+const char TAG[] = "ELA";
+
+#include "nimble/nimble_port.h"
+#include "nimble/nimble_port_freertos.h"
+#include "host/ble_hs.h"
+#include "host/ble_hs.h"
+#include "host/ble_uuid.h"
+#include "revk.h"
+#include "ela.h"
+
+ela_t *ela=NULL;
+
+ela_t *ela_find(ble_addr_t * a, int make)
+{                               // Find (create) a device record
+   ela_t *d;
+   for (d = ela; d; d = d->next)
+      if (d->addr.type == a->type && !memcmp(d->addr.val, a->val, 6))
+         break;
+   if (!d && !make)
+      return d;
+   if (!d)
+   {
+      d = malloc(sizeof(*d));
+      memset(d, 0, sizeof(*d));
+      d->addr = *a;
+      d->next = ela;
+      d->missing = 1;
+      ela = d;
+   }
+   d->last = uptime();
+   return d;
+}
+
+int ela_gap_disc(struct ble_gap_event *event)
+{
+   const uint8_t *p = event->disc.data,
+       *e = p + event->disc.length_data;
+   if (e > p + 31)
+      return 0;                 // Silly
+   ela_t *d = ela_find(&event->disc.addr, 0);
+   if (d)
+      ESP_LOG_BUFFER_HEX(event->disc.event_type == BLE_HCI_ADV_RPT_EVTYPE_SCAN_RSP ? "Rsp" : "Adv", event->disc.data, event->disc.length_data);
+   // Check if a temp device
+   const uint8_t *name = NULL;
+   const uint8_t *temp = NULL;
+   const uint8_t *bat = 0;
+   const uint8_t *volt = 0;
+   uint16_t man = 0;
+   while (p < e)
+   {
+      const uint8_t *n = p + *p + 1;
+      if (n > e)
+         break;
+      if (p[0] > 1 && (p[1] == 8 || p[1] == 9))
+         name = p;
+      else if (*p == 5 && p[1] == 0x16 && p[2] == 0x6E && p[3] == 0x2A)
+         temp = p + 4;
+      else if (*p == 4 && p[1] == 0x16 && p[2] == 0x0F && p[3] == 0x18)
+         bat = p + 4;
+      else if (*p == 4 && p[1] == 0x16 && p[2] == 0x19 && p[3] == 0x2A)
+         bat = p + 4;
+      if (*p >= 3 && p[1] == 0xFF)
+      {
+         man = ((p[3] << 8) | p[2]);
+         if (man == 0x757)
+         {
+            if (*p == 5 && p[4] == 0xF1)
+               bat = p + 5;
+            else if (*p == 6 && p[4] == 0xF2)
+               volt = p + 5;
+            else if (*p == 6 && p[4] == 0x12)
+               temp = p + 5;
+         }
+      }
+      p = n;
+   }
+   if (!d && man != 0x0757 && (!temp || !name))
+      return 0;                 // Not temp device
+   if (!d)
+      d = ela_find(&event->disc.addr, 1);
+   if (d->namelen != *name - 1 || memcmp(d->name, name + 2, d->namelen))
+   {
+      memcpy(d->name, name + 2, d->namelen = *name - 1);
+      d->name[d->namelen] = 0;
+   }
+   if (temp)
+      d->temp = ((temp[1] << 8) | temp[0]);
+   if (bat)
+      d->bat = *bat;
+   if (volt)
+      d->volt = ((volt[1] << 8) + volt[0]);;
+   d->rssi = event->disc.rssi;
+   if (d->missing)
+   {
+      d->lastreport = 0;
+      d->missing = 0;
+      d->found = 1;
+   }
+   ESP_LOGD(TAG, "Temp \"%s\" T%d B%d V%d R%d", d->name, d->temp, d->bat, d->volt, d->rssi);
+   return 0;
+}
+
+void ela_expire(uint32_t missingtime)
+{
+   uint32_t now = uptime();
+   // Devices missing
+   for (ela_t * d = ela; d; d = d->next)
+      if (!d->missing && d->last + missingtime < now)
+      {                         // Missing
+         d->missing = 1;
+         ESP_LOGD(TAG, "Missing %s", ble_addr_format(&d->addr));
+      }
+   // Devices found
+   for (ela_t * d = ela; d; d = d->next)
+      if (d->found)
+      {
+         d->found = 0;
+         ESP_LOGD(TAG, "Found %s", ble_addr_format(&d->addr));
+      }
+}
+
+void ela_clean(void)
+{
+   if (ble_gap_disc_active())
+      return;                   // maybe use a mutex instead
+   uint32_t now = uptime();
+   ela_t **dd = &ela;
+   while (*dd)
+   {
+      ela_t *d = *dd;
+      if (d->last + 300 < now)
+      {
+         ESP_LOGD(TAG, "Forget %s", ble_addr_format(&d->addr));
+         *dd = d->next;
+         free(d);
+         continue;
+      }
+      dd = &d->next;
+   }
+}
+
+const char *ble_addr_format(ble_addr_t * a)
+{
+   static char buf[30];
+   snprintf(buf, sizeof(buf), "%02X:%02X:%02X:%02X:%02X:%02X", a->val[5], a->val[4], a->val[3], a->val[2], a->val[1], a->val[0]);
+   if (a->type == BLE_ADDR_RANDOM)
+      strcat(buf, "(rand)");
+   else if (a->type == BLE_ADDR_PUBLIC_ID)
+      strcat(buf, "(pubid)");
+   else if (a->type == BLE_ADDR_RANDOM_ID)
+      strcat(buf, "(randid)");
+   //else if (a->type == BLE_ADDR_PUBLIC) strcat(buf, "(pub)");
+   return buf;
+}

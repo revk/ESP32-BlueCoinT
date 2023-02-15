@@ -18,8 +18,8 @@ const char TAG[] = "BlueCoinT";
 #include "console/console.h"
 #include "host/ble_hs.h"
 #include "host/ble_uuid.h"
-
 #include <driver/gpio.h>
+#include "ela.h"
 
 #ifndef	CONFIG_SOC_BLE_SUPPORTED
 #error	You need CONFIG_SOC_BLE_SUPPORTED
@@ -31,28 +31,6 @@ const char TAG[] = "BlueCoinT";
 #define port_mask(p) ((p)&0x3F)
 
 httpd_handle_t webserver = NULL;
-
-typedef struct device_s device_t;
-struct device_s {
-   device_t *next;              // Linked list
-   ble_addr_t addr;             // Address (includes type)
-   uint8_t namelen;             // Device name length
-   char name[32];               // Device name (null terminated)
-   char better[13];             // ID (Mac) of better device
-   int8_t betterrssi;           // Better RSSI
-   int8_t rssi;                 // RSSI
-   uint32_t lastbetter;         // uptime when last better entry
-   uint32_t last;               // uptime of last seen
-   uint32_t lastreport;         // uptime of last reported
-   int16_t temp;                // Temp
-   int16_t tempreport;          // Temp last reported
-   uint16_t volt;               // Bat voltage
-   int8_t bat;                  // Bat %
-   uint8_t found:1;
-   uint8_t missing:1;
-};
-device_t *device = NULL;
-device_t *find_device(ble_addr_t * a, int make);
 
 #define	settings		\
 	u32(missingtime,30)	\
@@ -86,7 +64,7 @@ const char *app_callback(int client, const char *prefix, const char *target, con
             jo_strncpy(j, add, sizeof(add));
             for (int i = 0; i < 6; i++)
                a.val[5 - i] = (((isalpha(add[i * 3]) ? 9 : 0) + (add[i * 3] & 0xF)) << 4) + (isalpha(add[i * 3 + 1]) ? 9 : 0) + (add[i * 3 + 1] & 0xF);
-            device_t *d = find_device(&a, 0);
+            ela_t *d = ela_find(&a, 0);
             if (d)
             {
                int c = strcmp(target, d->better);
@@ -127,111 +105,13 @@ const char *app_callback(int client, const char *prefix, const char *target, con
 struct ble_hs_cfg;
 struct ble_gatt_register_ctxt;
 
-static const char *ble_addr_format(ble_addr_t * a)
-{
-   static char buf[30];
-   snprintf(buf, sizeof(buf), "%02X:%02X:%02X:%02X:%02X:%02X", a->val[5], a->val[4], a->val[3], a->val[2], a->val[1], a->val[0]);
-   if (a->type == BLE_ADDR_RANDOM)
-      strcat(buf, "(rand)");
-   else if (a->type == BLE_ADDR_PUBLIC_ID)
-      strcat(buf, "(pubid)");
-   else if (a->type == BLE_ADDR_RANDOM_ID)
-      strcat(buf, "(randid)");
-   //else if (a->type == BLE_ADDR_PUBLIC) strcat(buf, "(pub)");
-   return buf;
-}
-
-device_t *find_device(ble_addr_t * a, int make)
-{                               // Find (create) a device record
-   device_t *d;
-   for (d = device; d; d = d->next)
-      if (d->addr.type == a->type && !memcmp(d->addr.val, a->val, 6))
-         break;
-   if (!d && !make)
-      return d;
-   if (!d)
-   {
-      d = malloc(sizeof(*d));
-      memset(d, 0, sizeof(*d));
-      d->addr = *a;
-      d->next = device;
-      device = d;
-      d->found = 1;
-   }
-   d->last = uptime();
-   return d;
-}
-
 static int ble_gap_event(struct ble_gap_event *event, void *arg)
 {
    switch (event->type)
    {
    case BLE_GAP_EVENT_DISC:
       {
-         const uint8_t *p = event->disc.data,
-             *e = p + event->disc.length_data;
-         if (e > p + 31)
-            break;              // Silly
-         device_t *d = find_device(&event->disc.addr, 0);
-         if (d)
-            ESP_LOG_BUFFER_HEX(event->disc.event_type == BLE_HCI_ADV_RPT_EVTYPE_SCAN_RSP ? "Rsp" : "Adv", event->disc.data, event->disc.length_data);
-         // Check if a temp device
-         const uint8_t *name = NULL;
-         const uint8_t *temp = NULL;
-         const uint8_t *bat = 0;
-         const uint8_t *volt = 0;
-         uint16_t man = 0;
-         while (p < e)
-         {
-            const uint8_t *n = p + *p + 1;
-            if (n > e)
-               break;
-            if (p[0] > 1 && (p[1] == 8 || p[1] == 9))
-               name = p;
-            else if (*p == 5 && p[1] == 0x16 && p[2] == 0x6E && p[3] == 0x2A)
-               temp = p + 4;
-            else if (*p == 4 && p[1] == 0x16 && p[2] == 0x0F && p[3] == 0x18)
-               bat = p + 4;
-            else if (*p == 4 && p[1] == 0x16 && p[2] == 0x19 && p[3] == 0x2A)
-               bat = p + 4;
-            if (*p >= 3 && p[1] == 0xFF)
-            {
-               man = ((p[3] << 8) | p[2]);
-               if (man == 0x757)
-               {
-                  if (*p == 5 && p[4] == 0xF1)
-                     bat = p + 5;
-                  else if (*p == 6 && p[4] == 0xF2)
-                     volt = p + 5;
-                  else if (*p == 6 && p[4] == 0x12)
-                     temp = p + 5;
-               }
-            }
-            p = n;
-         }
-         if (!d && man != 0x0757 && (!temp || !name))
-            break;              // Not temp device
-         if (!d)
-            d = find_device(&event->disc.addr, 1);
-         if (d->namelen != *name - 1 || memcmp(d->name, name + 2, d->namelen))
-         {
-            memcpy(d->name, name + 2, d->namelen = *name - 1);
-            d->name[d->namelen] = 0;
-         }
-         if (temp)
-            d->temp = ((temp[1] << 8) | temp[0]);
-         if (bat)
-            d->bat = *bat;
-         if (volt)
-            d->volt = ((volt[1] << 8) + volt[0]);;
-         d->rssi = event->disc.rssi;
-         if (d->missing)
-         {
-            d->lastreport = 0;
-            d->missing = 0;
-            d->found = 1;
-         }
-         ESP_LOGI(TAG, "Temp \"%s\" T%d B%d V%d R%d", d->name, d->temp, d->bat, d->volt, d->rssi);
+         ela_gap_disc(event);
          break;
       }
 
@@ -314,7 +194,7 @@ void app_main()
    /* Start the task */
    nimble_port_freertos_init(ble_task);
 
-   jo_t jo_device(device_t * d) {
+   jo_t jo_ela(ela_t * d) {
       jo_t j = jo_object_alloc();
       jo_string(j, "address", ble_addr_format(&d->addr));
       jo_string(j, "name", d->name);
@@ -326,25 +206,12 @@ void app_main()
    {
       usleep(100000);
       uint32_t now = uptime();
-      // Devices missing
-      for (device_t * d = device; d; d = d->next)
-         if (!d->missing && d->last + missingtime < now)
-         {                      // Missing
-            d->missing = 1;
-            ESP_LOGI(TAG, "Missing %s", ble_addr_format(&d->addr));
-         }
-      // Devices found
-      for (device_t * d = device; d; d = d->next)
-         if (d->found)
-         {
-            d->found = 0;
-            ESP_LOGI(TAG, "Found %s", ble_addr_format(&d->addr));
-         }
-      for (device_t * d = device; d; d = d->next)
+      ela_expire(missingtime);
+      for (ela_t * d = ela; d; d = d->next)
          if (*d->better && d->lastbetter + reporting * 3 / 2 < now)
             *d->better = 0;     // Not seeing better
       // Reporting
-      for (device_t * d = device; d; d = d->next)
+      for (ela_t * d = ela; d; d = d->next)
          if (!d->missing && (d->lastreport + reporting <= now || d->tempreport + temprise < d->temp))
          {
             d->lastreport = now;
@@ -354,7 +221,7 @@ void app_main()
                ESP_LOGI(TAG, "Not reporting \"%s\" %d as better %s %d", d->name, d->rssi, d->better, d->betterrssi);
                continue;
             }
-            jo_t j = jo_device(d);
+            jo_t j = jo_ela(d);
             if (d->temp < 0)
                jo_litf(j, "temp", "-%d.%02d", (-d->temp) / 100, (-d->temp) % 100);
             else
@@ -370,20 +237,7 @@ void app_main()
 
       if (!ble_gap_disc_active())
       {                         // Restart discovery, but first should be safe to check for deletions
-         uint32_t now = uptime();
-         device_t **dd = &device;
-         while (*dd)
-         {
-            device_t *d = *dd;
-            if (d->last + 300 < now)
-            {
-               ESP_LOGI(TAG, "Forget %s", ble_addr_format(&d->addr));
-               *dd = d->next;
-               free(d);
-               continue;
-            }
-            dd = &d->next;
-         }
+         ela_clean();
          ble_start_disc();
       }
    }
