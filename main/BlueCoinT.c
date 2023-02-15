@@ -85,12 +85,6 @@ const char *app_callback(int client, const char *prefix, const char *target, con
    }
    if (!strcmp(suffix, "shutdown"))
       httpd_stop(webserver);
-   if (!strcmp(suffix, "upgrade"))
-   {
-      esp_bt_controller_disable();      // Kill bluetooth during download - TODO may be better done in RevK library, with a watchdog change
-      esp_wifi_set_ps(WIFI_PS_NONE);    // Full wifi
-      revk_restart("Download started", 10);     // Restart if download does not happen properly
-   }
    return NULL;
 }
 

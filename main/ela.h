@@ -2,7 +2,6 @@
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
 #include "host/ble_hs.h"
-#include "host/ble_hs.h"
 #include "host/ble_uuid.h"
 
 typedef struct ela_s ela_t;
