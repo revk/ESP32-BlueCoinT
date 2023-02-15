@@ -24,5 +24,7 @@ extern ela_t *ela;
 const char *ble_addr_format(ble_addr_t * a);
 ela_t *ela_find(ble_addr_t * a, int make);      // Find a device by address
 int ela_gap_disc(struct ble_gap_event *event);  // Handle GAP disc event
-void ela_expire(uint32_t missingtime);          // Expire (i.e. missing)
+void ela_expire(uint32_t missingtime);  // Expire (i.e. missing)
 void ela_clean(void);           // Delete old entries
+
+void ela_run(void);             // Run BLE for ELA

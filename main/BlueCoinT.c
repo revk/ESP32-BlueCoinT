@@ -99,66 +99,6 @@ const char *app_callback(int client, const char *prefix, const char *target, con
    return NULL;
 }
 
-/* BLE */
-
-
-struct ble_hs_cfg;
-struct ble_gatt_register_ctxt;
-
-static int ble_gap_event(struct ble_gap_event *event, void *arg)
-{
-   switch (event->type)
-   {
-   case BLE_GAP_EVENT_DISC:
-      {
-         ela_gap_disc(event);
-         break;
-      }
-
-   default:
-      ESP_LOGE(TAG, "BLE event %d", event->type);
-      break;
-   }
-
-   return 0;
-}
-
-static void ble_start_disc(void)
-{
-   struct ble_gap_disc_params disc_params = {
-      .passive = 1,
-   };
-   if (ble_gap_disc(0 /* public */ , BLE_HS_FOREVER, &disc_params, ble_gap_event, NULL))
-      ESP_LOGE(TAG, "Discover failed to start");
-}
-
-static uint8_t ble_addr_type;
-static void ble_on_sync(void)
-{
-   int rc;
-
-   rc = ble_hs_id_infer_auto(0, &ble_addr_type);
-   assert(rc == 0);
-
-   uint8_t addr_val[6] = { 0 };
-   rc = ble_hs_id_copy_addr(ble_addr_type, addr_val, NULL);
-
-   ble_start_disc();
-}
-
-static void ble_on_reset(int reason)
-{
-}
-
-void ble_task(void *param)
-{
-   ESP_LOGI(TAG, "BLE Host Task Started");
-   /* This function will return only when nimble_port_stop() is executed */
-   nimble_port_run();
-
-   nimble_port_freertos_deinit();
-}
-
 /* MAIN */
 void app_main()
 {
@@ -180,26 +120,7 @@ void app_main()
 
    revk_wait_mqtt(60);
 
-   REVK_ERR_CHECK(esp_wifi_set_ps(WIFI_PS_MIN_MODEM));  /* default mode, but library may have overridden, needed for BLE at same time as wifi */
-   nimble_port_init();
-
-   /* Initialize the NimBLE host configuration */
-   ble_hs_cfg.sync_cb = ble_on_sync;
-   ble_hs_cfg.reset_cb = ble_on_reset;
-   ble_hs_cfg.sm_sc = 1;
-   ble_hs_cfg.sm_mitm = 0;
-   ble_hs_cfg.sm_bonding = 1;
-   ble_hs_cfg.sm_io_cap = BLE_SM_IO_CAP_NO_IO;
-
-   /* Start the task */
-   nimble_port_freertos_init(ble_task);
-
-   jo_t jo_ela(ela_t * d) {
-      jo_t j = jo_object_alloc();
-      jo_string(j, "address", ble_addr_format(&d->addr));
-      jo_string(j, "name", d->name);
-      return j;
-   }
+   ela_run();
 
    /* main loop */
    while (1)
@@ -221,7 +142,9 @@ void app_main()
                ESP_LOGI(TAG, "Not reporting \"%s\" %d as better %s %d", d->name, d->rssi, d->better, d->betterrssi);
                continue;
             }
-            jo_t j = jo_ela(d);
+            jo_t j = jo_object_alloc();
+            jo_string(j, "address", ble_addr_format(&d->addr));
+            jo_string(j, "name", d->name);
             if (d->temp < 0)
                jo_litf(j, "temp", "-%d.%02d", (-d->temp) / 100, (-d->temp) % 100);
             else
@@ -235,11 +158,7 @@ void app_main()
             ESP_LOGI(TAG, "Report %s \"%s\" %d (%s %d)", ble_addr_format(&d->addr), d->name, d->rssi, d->better, d->betterrssi);
          }
 
-      if (!ble_gap_disc_active())
-      {                         // Restart discovery, but first should be safe to check for deletions
-         ela_clean();
-         ble_start_disc();
-      }
+      ela_clean();
    }
    return;
 }

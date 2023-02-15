@@ -10,7 +10,7 @@ const char TAG[] = "ELA";
 #include "revk.h"
 #include "ela.h"
 
-ela_t *ela=NULL;
+ela_t *ela = NULL;
 
 ela_t *ela_find(ble_addr_t * a, int make)
 {                               // Find (create) a device record
@@ -153,4 +153,80 @@ const char *ble_addr_format(ble_addr_t * a)
       strcat(buf, "(randid)");
    //else if (a->type == BLE_ADDR_PUBLIC) strcat(buf, "(pub)");
    return buf;
+}
+
+// --------------------------------------------------------------------------------
+// Run BLE just for ELA
+
+struct ble_hs_cfg;
+struct ble_gatt_register_ctxt;
+
+static int ble_gap_event(struct ble_gap_event *event, void *arg)
+{
+   switch (event->type)
+   {
+   case BLE_GAP_EVENT_DISC:
+      {
+         ela_gap_disc(event);
+         break;
+      }
+   default:
+      ESP_LOGD(TAG, "BLE event %d", event->type);
+      break;
+   }
+
+   return 0;
+}
+
+static void ble_start_disc(void)
+{
+   struct ble_gap_disc_params disc_params = {
+      .passive = 1,
+   };
+   if (ble_gap_disc(0 /* public */ , BLE_HS_FOREVER, &disc_params, ble_gap_event, NULL))
+      ESP_LOGE(TAG, "Discover failed to start");
+}
+
+static uint8_t ble_addr_type;
+static void ble_on_sync(void)
+{
+   int rc;
+
+   rc = ble_hs_id_infer_auto(0, &ble_addr_type);
+   assert(rc == 0);
+
+   uint8_t addr_val[6] = { 0 };
+   rc = ble_hs_id_copy_addr(ble_addr_type, addr_val, NULL);
+
+   ble_start_disc();
+}
+
+static void ble_on_reset(int reason)
+{
+}
+
+static void ble_task(void *param)
+{
+   ESP_LOGI(TAG, "BLE Host Task Started");
+   /* This function will return only when nimble_port_stop() is executed */
+   nimble_port_run();
+
+   nimble_port_freertos_deinit();
+}
+
+void ela_run(void)
+{                               // Just run BLE for ELA only
+   REVK_ERR_CHECK(esp_wifi_set_ps(WIFI_PS_MIN_MODEM));  /* default mode, but library may have overridden, needed for BLE at same time as wifi */
+   nimble_port_init();
+
+   /* Initialize the NimBLE host configuration */
+   ble_hs_cfg.sync_cb = ble_on_sync;
+   ble_hs_cfg.reset_cb = ble_on_reset;
+   ble_hs_cfg.sm_sc = 1;
+   ble_hs_cfg.sm_mitm = 0;
+   ble_hs_cfg.sm_bonding = 1;
+   ble_hs_cfg.sm_io_cap = BLE_SM_IO_CAP_NO_IO;
+
+   /* Start the task */
+   nimble_port_freertos_init(ble_task);
 }
