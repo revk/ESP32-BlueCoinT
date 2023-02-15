@@ -11,13 +11,8 @@ const char TAG[] = "BlueCoinT";
 #include "esp_http_server.h"
 #include "esp_crt_bundle.h"
 #include "esp_bt.h"
-#include "nimble/nimble_port.h"
-#include "nimble/nimble_port_freertos.h"
-#include "host/ble_hs.h"
 #include "host/util/util.h"
 #include "console/console.h"
-#include "host/ble_hs.h"
-#include "host/ble_uuid.h"
 #include <driver/gpio.h>
 #include "ela.h"
 

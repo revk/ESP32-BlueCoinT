@@ -2,11 +2,6 @@
 static __attribute__((unused))
 const char TAG[] = "ELA";
 
-#include "nimble/nimble_port.h"
-#include "nimble/nimble_port_freertos.h"
-#include "host/ble_hs.h"
-#include "host/ble_hs.h"
-#include "host/ble_uuid.h"
 #include "revk.h"
 #include "ela.h"
 
