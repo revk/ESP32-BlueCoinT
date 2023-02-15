@@ -35,8 +35,7 @@ int ela_gap_disc(struct ble_gap_event *event)
    if (e > p + 31)
       return 0;                 // Silly
    ela_t *d = ela_find(&event->disc.addr, 0);
-   if (d)
-      ESP_LOG_BUFFER_HEX(event->disc.event_type == BLE_HCI_ADV_RPT_EVTYPE_SCAN_RSP ? "Rsp" : "Adv", event->disc.data, event->disc.length_data);
+   //if (d) ESP_LOG_BUFFER_HEX(event->disc.event_type == BLE_HCI_ADV_RPT_EVTYPE_SCAN_RSP ? "Rsp" : "Adv", event->disc.data, event->disc.length_data);
    // Check if a temp device
    const uint8_t *name = NULL;
    const uint8_t *temp = NULL;
