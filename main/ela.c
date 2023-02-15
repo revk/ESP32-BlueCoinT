@@ -104,14 +104,14 @@ void ela_expire(uint32_t missingtime)
       if (!d->missing && d->last + missingtime < now)
       {                         // Missing
          d->missing = 1;
-         ESP_LOGD(TAG, "Missing %s", ble_addr_format(&d->addr));
+         ESP_LOGI(TAG, "Missing %s %s", ble_addr_format(&d->addr), d->name);
       }
    // Devices found
    for (ela_t * d = ela; d; d = d->next)
       if (d->found)
       {
          d->found = 0;
-         ESP_LOGD(TAG, "Found %s", ble_addr_format(&d->addr));
+         ESP_LOGI(TAG, "Found %s %s", ble_addr_format(&d->addr), d->name);
       }
 }
 
@@ -126,7 +126,7 @@ void ela_clean(void)
       ela_t *d = *dd;
       if (d->last + 300 < now)
       {
-         ESP_LOGD(TAG, "Forget %s", ble_addr_format(&d->addr));
+         ESP_LOGD(TAG, "Forget %s %s", ble_addr_format(&d->addr), d->name);
          *dd = d->next;
          free(d);
          continue;
